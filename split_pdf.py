@@ -128,11 +128,17 @@ def run_split(
     for i, (lv, title, page, _) in enumerate(filtered):
         start = page
         end = total_pages - offset
-        for j in range(i + 1, len(filtered)):
-            if filtered[j][0] <= lv:
-                next_page = filtered[j][2]
-                end = start if next_page == start else next_page - 1
-                break
+
+        # 先看紧挨的下一条（任意层级）：
+        #   同页 → 当前条目仅占这一页（章/节标题页与子条目共页的情况）
+        #   不同页 → 按层级向后找同级或父级条目，取其起始页 - 1
+        if i + 1 < len(filtered) and filtered[i + 1][2] == start:
+            end = start
+        else:
+            for j in range(i + 1, len(filtered)):
+                if filtered[j][0] <= lv:
+                    end = filtered[j][2] - 1
+                    break
         pdf_start = start + offset
         if pdf_start > total_pages:
             print(f"  警告：「{title}」PDF页码 {pdf_start} 超出总页数 {total_pages}，已跳过")
