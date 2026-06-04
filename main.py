@@ -33,10 +33,15 @@ def check_api_key() -> None:
 def print_toc_preview(entries: list[dict]) -> None:
     print(f"\n  识别到 {len(entries)} 条目录项：")
     indent = {1: "", 2: "  ", 3: "    "}
+    enc = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
     for e in entries:
         prefix = indent.get(e["level"], "      ")
         page_str = str(e["page"]) if e["page"] > 0 else "?"
-        print(f"  {prefix}[L{e['level']}] {e['title']} ... {page_str}")
+        line = f"  {prefix}[L{e['level']}] {e['title']} ... {page_str}"
+        try:
+            print(line)
+        except UnicodeEncodeError:
+            print(line.encode(enc, errors="replace").decode(enc))
 
 
 def ask_toc_pages(pdf_name: str) -> list[int] | None:

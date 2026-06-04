@@ -40,10 +40,11 @@ BOOKS_COLS = [
 
 # split_config.xlsx 的列定义：(列名, 说明, 默认值)
 SPLIT_COLS = [
-    ("max_pages",     "每个文件夹的最大页数",          100),
-    ("prefix_digits", "文件前缀序号位数（3→001-）",    3),
-    ("prefix_sep",    "前缀分隔符",                    "-"),
-    ("folder_digits", "文件夹编号位数（2→01）",        2),
+    ("max_pages",          "每个文件夹的最大页数",                   100),
+    ("max_pages_per_file", "单文件最大页数（超出切为_1/_2，空=不限）", None),
+    ("prefix_digits",      "文件前缀序号位数（3→001-）",              3),
+    ("prefix_sep",         "前缀分隔符",                             "-"),
+    ("folder_digits",      "文件夹编号位数（2→01）",                  2),
 ]
 
 HEADER_FILL = PatternFill("solid", fgColor="4472C4")

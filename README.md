@@ -27,6 +27,9 @@ books-todo/*.pdf
           01/  001-第一章.pdf
                002-第一节.pdf  ...
           02/  ...
+      │
+      ▼  OneNote Batch 插件      【Pipeline 3：导入（外部）】
+         将 books-done/{书名}_拆分/ 导入 OneNote
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
@@ -80,6 +83,8 @@ uv run python main.py --write
 1. 目录页范围（如 `7`、`7-9`、`7,8,9`）
 2. 偏移量确认（PDF 实际页码 vs 印刷页码）
 
+> **提示**：若已知目录页和偏移量，可预先在 `books_config.xlsx` 的 `toc_pages` / `offset` 列填好，程序将跳过对应询问，实现无交互批量运行。
+
 识别完成后，`books-work/{书名}/toc_parsed.txt` 可手工编辑修正，格式为：
 
 ```
@@ -100,7 +105,7 @@ uv run python init_work.py
 | 文件 | 内容 |
 |------|------|
 | `books-work/books_config.xlsx` | 每本书一行：进度 flag、offset、拆分层级、是否完成 |
-| `books-work/split_config.xlsx` | 全局格式：文件夹大小上限、前缀位数等 |
+| `books-work/split_config.xlsx` | 全局格式：文件夹大小上限、单文件页数上限、前缀位数等 |
 
 ### Pipeline 2：按章节拆分 PDF
 
@@ -126,11 +131,18 @@ uv run python split_pdf.py "书名" --level 3 --max-pages 100
 | 参数 | 默认 | 说明 |
 |------|------|------|
 | `--level` | 3 | 拆分最大层级（1=章, 2=节, 3=小节） |
-| `--max-pages` | 100 | 每个文件夹页数上限 |
+| `--max-pages` | 100 | 每个文件夹总页数上限（超出换下一个文件夹） |
+| `--max-pages-per-file` | 不限 | 单个输出文件最大页数，超出则切为 `_1/_2/…` 多份 |
 | `--prefix-digits` | 3 | 前缀位数（3 → `001-`） |
 | `--prefix-sep` | `-` | 前缀分隔符 |
 | `--folder-digits` | 2 | 文件夹编号位数（2 → `01`） |
 | `--offset` | 自动 | 手动覆盖页码偏移量 |
+
+#### 与 OneNote Batch 配合使用
+
+拆分完成后，将 `books-done/{书名}_拆分/` 作为源目录交给 OneNote Batch 插件导入。
+
+若需控制每次导入的页数（如 OneNote 每页限 20 页），在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`），超限章节将自动切为 `001-章节_1.pdf`、`001-章节_2.pdf` 等多份，每份均不超过该限制。
 
 ---
 

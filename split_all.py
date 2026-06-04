@@ -45,11 +45,14 @@ def read_split_config() -> dict:
     values = values_row[0]
     cfg = dict(zip(headers, values))
 
+    raw_mpf = cfg.get("max_pages_per_file")
+    max_pages_per_file = int(raw_mpf) if raw_mpf else None
     return {
-        "max_pages":     int(cfg.get("max_pages",     defaults["max_pages"])),
-        "prefix_digits": int(cfg.get("prefix_digits", defaults["prefix_digits"])),
-        "prefix_sep":    str(cfg.get("prefix_sep",    defaults["prefix_sep"])),
-        "folder_digits": int(cfg.get("folder_digits", defaults["folder_digits"])),
+        "max_pages":          int(cfg.get("max_pages",     defaults["max_pages"])),
+        "max_pages_per_file": max_pages_per_file,
+        "prefix_digits":      int(cfg.get("prefix_digits", defaults["prefix_digits"])),
+        "prefix_sep":         str(cfg.get("prefix_sep",    defaults["prefix_sep"])),
+        "folder_digits":      int(cfg.get("folder_digits", defaults["folder_digits"])),
     }
 
 
@@ -150,6 +153,7 @@ def main() -> None:
                 name,
                 level=level,
                 max_pages=split_cfg["max_pages"],
+                max_pages_per_file=split_cfg["max_pages_per_file"],
                 prefix_digits=split_cfg["prefix_digits"],
                 prefix_sep=split_cfg["prefix_sep"],
                 folder_digits=split_cfg["folder_digits"],

@@ -12,11 +12,20 @@
 """
 
 import argparse
+import math
 import re
 import sys
 from pathlib import Path
 
 import fitz  # pymupdf
+
+
+def _sp(s: str) -> None:
+    enc = getattr(sys.stdout, "encoding", "utf-8") or "utf-8"
+    try:
+        print(s)
+    except UnicodeEncodeError:
+        print(s.encode(enc, errors="replace").decode(enc))
 
 
 BASE_DIR = Path(__file__).parent
@@ -58,6 +67,7 @@ def run_split(
     *,
     level: int = 3,
     max_pages: int = 100,
+    max_pages_per_file: int | None = None,
     prefix_digits: int = 3,
     prefix_sep: str = "-",
     folder_digits: int = 2,
@@ -117,11 +127,28 @@ def run_split(
     print(f"最大拆分层级：{level}，条目数：{len(filtered)}")
     print(f"每文件夹页数上限：{max_pages}\n")
 
-    def save_section(pdf_start: int, pdf_end: int, out_path: Path) -> None:
-        out_doc = fitz.open()
-        out_doc.insert_pdf(src, from_page=pdf_start - 1, to_page=pdf_end - 1)
-        out_doc.save(str(out_path))
-        out_doc.close()
+    def save_section(pdf_start: int, pdf_end: int, out_path: Path) -> list[Path]:
+        """Save a page range to out_path; splits into _1/_2/… if max_pages_per_file is set."""
+        page_count = pdf_end - pdf_start + 1
+        if not max_pages_per_file or page_count <= max_pages_per_file:
+            out_doc = fitz.open()
+            out_doc.insert_pdf(src, from_page=pdf_start - 1, to_page=pdf_end - 1)
+            out_doc.save(str(out_path))
+            out_doc.close()
+            return [out_path]
+        # File-level split: stem_1.pdf, stem_2.pdf, …
+        n_parts = math.ceil(page_count / max_pages_per_file)
+        parts = []
+        for i in range(n_parts):
+            part_start = pdf_start + i * max_pages_per_file
+            part_end   = min(part_start + max_pages_per_file - 1, pdf_end)
+            part_path  = out_path.parent / f"{out_path.stem}_{i + 1}{out_path.suffix}"
+            out_doc = fitz.open()
+            out_doc.insert_pdf(src, from_page=part_start - 1, to_page=part_end - 1)
+            out_doc.save(str(part_path))
+            out_doc.close()
+            parts.append(part_path)
+        return parts
 
     # 计算每个条目的页面范围（印刷页码）
     sections: list[tuple[str, int, int, int]] = []  # (title, pdf_start, pdf_end, level)
@@ -167,10 +194,15 @@ def run_split(
             out_dir = out_root / folder_name
             out_dir.mkdir(parents=True, exist_ok=True)
             fm_filename = f"000{prefix_sep}{sanitize_filename(book_name)}.pdf"
-            save_section(1, fm_pdf_end, out_dir / fm_filename)
-            print(f"  [{folder_name}] {fm_filename}  ({fm_pages} 页，PDF第1–{fm_pdf_end}页)")
+            saved_fm = save_section(1, fm_pdf_end, out_dir / fm_filename)
+            if len(saved_fm) == 1:
+                _sp(f"  [{folder_name}] {fm_filename}  ({fm_pages} 页，PDF第1–{fm_pdf_end}页)")
+            else:
+                _sp(f"  [{folder_name}] {fm_filename}  ({fm_pages} 页→{len(saved_fm)}份，PDF第1–{fm_pdf_end}页)")
+                for part_path in saved_fm:
+                    _sp(f"    └ {part_path.name}")
             cumulative += fm_pages
-            total_files += 1
+            total_files += len(saved_fm)
 
     # 正文各条目
     for seq, (title, pdf_start, pdf_end, lv) in enumerate(sections, start=1):
@@ -182,11 +214,16 @@ def run_split(
         indent = "  " * (lv - 1)
         prefix = f"{seq:0{prefix_digits}d}{prefix_sep}"
         filename = prefix + sanitize_filename(title) + ".pdf"
-        save_section(pdf_start, pdf_end, out_dir / filename)
+        saved = save_section(pdf_start, pdf_end, out_dir / filename)
 
-        print(f"  [{folder_name}] {indent}{filename}  ({page_count} 页，PDF第{pdf_start}–{pdf_end}页)")
+        if len(saved) == 1:
+            _sp(f"  [{folder_name}] {indent}{filename}  ({page_count} 页，PDF第{pdf_start}–{pdf_end}页)")
+        else:
+            _sp(f"  [{folder_name}] {indent}{filename}  ({page_count} 页→{len(saved)}份，PDF第{pdf_start}–{pdf_end}页)")
+            for part_path in saved:
+                _sp(f"    └ {part_path.name}")
         cumulative += page_count
-        total_files += 1
+        total_files += len(saved)
 
     src.close()
     print(f"\n完成！共生成 {total_files} 个文件，输出至：{out_root}")
@@ -200,6 +237,8 @@ def main() -> None:
                         help="拆分最大层级（默认 3，即全部）")
     parser.add_argument("--max-pages", type=int, default=100,
                         help="每个批次文件夹页数上限（默认 100）")
+    parser.add_argument("--max-pages-per-file", type=int, default=None,
+                        help="单个输出文件最大页数，超出则切为 _1/_2/… 多份（默认不限）")
     parser.add_argument("--prefix-digits", type=int, default=3,
                         help="文件前缀序号位数（默认 3 → 001-）")
     parser.add_argument("--prefix-sep", type=str, default="-",
@@ -215,6 +254,7 @@ def main() -> None:
             args.book_name,
             level=args.level,
             max_pages=args.max_pages,
+            max_pages_per_file=args.max_pages_per_file,
             prefix_digits=args.prefix_digits,
             prefix_sep=args.prefix_sep,
             folder_digits=args.folder_digits,

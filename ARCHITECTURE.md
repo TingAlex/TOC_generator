@@ -18,6 +18,7 @@
 ┌───────────────────────────▼─────────────────────────────┐
 │                     Pipeline 2：拆分                      │
 │  books-done/*.pdf + toc_parsed.txt → 按章节拆分子 PDF      │
+│  （可选）单文件超限时进一步切为 _1/_2/… 多份               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -86,10 +87,12 @@ books-work/{书名}/toc_parsed.txt
 ┌── 前言页（000-书名.pdf，offset>0 时）
 │
 └── 各条目（001-章.pdf, 002-节.pdf ...）
-        按 max_pages 分批装入 01/, 02/ 子文件夹
+        ├─ 若页数 ≤ max_pages_per_file（或未设）→ 单文件输出
+        └─ 若页数 > max_pages_per_file → 切为 001-章_1.pdf, 001-章_2.pdf ...
+        按 max_pages 累计页数分批装入 01/, 02/ 子文件夹
 
     ▼
-books-done/{书名}_拆分/{01,02,...}/{序号-标题}.pdf
+books-done/{书名}_拆分/{01,02,...}/{序号-标题[_N]}.pdf
 ```
 
 完成后 `split_all.py` 将 `拆分完成=True` 写回 Excel。
@@ -121,10 +124,13 @@ books-done/{书名}_拆分/{01,02,...}/{序号-标题}.pdf
 
 | 列 | 默认 | 说明 |
 |----|------|------|
-| `max_pages` | 100 | 每个批次文件夹的页数上限 |
+| `max_pages` | 100 | 每个批次文件夹的累计页数上限（超出换下一个文件夹） |
+| `max_pages_per_file` | 空（不限） | 单个输出文件最大页数；超出时该文件切为 `_1/_2/…` 多份 |
 | `prefix_digits` | 3 | 文件序号前缀位数（`001-`） |
 | `prefix_sep` | `-` | 前缀分隔符 |
 | `folder_digits` | 2 | 文件夹编号位数（`01`） |
+
+> `max_pages_per_file` 的典型用途：与 OneNote Batch 插件配合时，将单个 PDF 页数控制在导入工具的上限以内（如 20 页）。
 
 ### 兜底：`books-work/{书名}/state.json`
 
@@ -171,13 +177,27 @@ for section in sections:
 - 当前文件夹已有内容 **且** 加入下一个文件会超限时，才创建新文件夹
 - 单个超限文件（如整章 > max_pages）独占一个文件夹
 
+## 文件级切片算法
+
+当 `max_pages_per_file` 有值，且某章节页数超出该值时：
+
+```python
+n_parts = ceil(page_count / max_pages_per_file)
+for i in range(n_parts):
+    part_start = pdf_start + i * max_pages_per_file
+    part_end   = min(part_start + max_pages_per_file - 1, pdf_end)
+    save(part_path=f"{prefix}{title}_{i+1}.pdf", pages=(part_start, part_end))
+```
+
+文件夹分配仍按原始章节的总页数计算，切片文件均落入同一文件夹。
+
 ---
 
 ## 依赖
 
 | 包 | 用途 |
 |----|------|
-| `pymupdf` | PDF 渲染（页→图片）、书签写入、页面提取 |
+| `pymupdf` | PDF 渲染（页→图片）、书签写入、页面提取与切片 |
 | `openai` | 调用兼容 OpenAI 接口的 provider（硅基流动、DeepSeek） |
 | `anthropic` | 调用 Anthropic Claude |
 | `openpyxl` | 读写 Excel 配置文件 |
