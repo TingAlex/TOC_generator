@@ -44,6 +44,7 @@
 |------|------|
 | `main.py` | Pipeline 1 批量入口；交互式询问目录页和偏移量；逐步推进每本书 |
 | `test_one.py` | Pipeline 1 单本测试；硬编码书名，方便调试 |
+| `claude_toc_helper.py` | Pipeline 1（Claude 版）辅助：`render`（渲染目录页）/`bookmarks`（写书签）两个**不调用 AI API** 的子命令；配合 skill `/toc-by-claude`，由 Claude 自身多模态能力替代 DeepSeek-OCR/V3 |
 | `init_work.py` | 扫描 books-todo/，将 state.json 数据迁移并写入 Excel；新书入库时重跑 |
 | `split_pdf.py` | Pipeline 2 单本命令行入口；同时也暴露 `run_split()` 供 split_all 调用 |
 | `split_all.py` | Pipeline 2 批量入口；读 Excel 配置，顺序处理所有未完成书本 |

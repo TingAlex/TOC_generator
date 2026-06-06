@@ -102,6 +102,19 @@ uv run python main.py --write
 3|1.1.1 细目|15
 ```
 
+#### Pipeline 1（Claude 版）：绕过 AI API，用 Claude 看图识别目录
+
+不想消耗 DeepSeek 等 API 额度时，可改用 **Claude 对话自身的多模态能力**完成识别目录这一步。
+在新的 Claude Code 对话里输入 **`/toc-by-claude`** 触发该 skill，它会固定走：
+
+1. `claude_toc_helper.py render "书名" --pages 2-4` 渲染目录页为 PNG（**不调用任何 API**）；
+2. 派发一个**子任务**让 Claude 直接看这些 PNG，写出 `books-work/{书名}/toc_parsed.txt`；
+3. `claude_toc_helper.py bookmarks "书名" --offset 18` 写入书签 → `books-done/{书名}.pdf`。
+
+进度照常记入 `books_config.xlsx`（`rendered/ocr_done/toc_parsed/bookmarks_added` 等），
+之后接 `init_work.py` / `split_all.py` 等流程不变。skill 定义见
+`.claude/skills/toc-by-claude/SKILL.md`，辅助脚本 `claude_toc_helper.py` 全程无需任何 `*_API_KEY`。
+
 ### 初始化配置 Excel
 
 ```powershell
@@ -297,6 +310,7 @@ uv run python onenote_strip_files.py --sections "新分区 1,新分区 2" --writ
 .
 ├── main.py              # Pipeline 1：OCR + 书签（批量）
 ├── test_one.py          # Pipeline 1：单本测试
+├── claude_toc_helper.py # Pipeline 1（Claude 版）：渲染/写书签辅助，不调用 API（配合 /toc-by-claude）
 ├── init_work.py         # 初始化/更新 Excel 配置
 ├── split_pdf.py         # Pipeline 2：单本拆分（命令行）
 ├── split_all.py         # Pipeline 2：批量拆分（读 Excel）
