@@ -30,6 +30,9 @@ books-todo/*.pdf
       │
       ▼  OneNote Batch 插件      【Pipeline 3：导入（外部）】
          将 books-done/{书名}_拆分/ 导入 OneNote
+      │
+      ▼  python onenote_sync_titles.py   【Pipeline 4：OneNote 本地整理】
+         核对/改正页标题 · 删除新分区占位页 · 去重（误打印两遍）
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
@@ -43,6 +46,7 @@ books-todo/*.pdf
 - **API Key**（任选其一）：
   - 硅基流动（推荐，免费注册）：https://cloud.siliconflow.cn
   - DeepSeek、Anthropic 或 OpenAI
+- **（仅 Pipeline 4 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）；依赖 `comtypes`（已在 `pyproject.toml`，`uv sync` 自动安装）
 
 ---
 
@@ -144,6 +148,47 @@ uv run python split_pdf.py "书名" --level 3 --max-pages 100
 
 若需控制每次导入的页数（如 OneNote 每页限 20 页），在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`），超限章节将自动切为 `001-章节_1.pdf`、`001-章节_2.pdf` 等多份，每份均不超过该限制。
 
+### Pipeline 4：OneNote 本地整理（核对标题 + 删占位页 + 去重）
+
+用 OneNote Batch 把拆分 PDF 导入后，常见两个收尾问题：
+
+- 每个新分区开头有一个**空白占位页**（标题为「无标题页」，新建分区时自动生成）。
+- 部分页面标题**没改成功**，仍是 OneNote 的默认标题「打印输出」。
+
+本工具直接调用 **OneNote 桌面版本地 COM 接口**核对修正，**全程本地离线**，不走网络 Graph API —— 这样可以在**关闭同步**的状态下安全操作（避免导入/改名过程中的同步冲突），改动落在本地缓存，等你重新开启同步时再上传。
+
+**前提与约定：**
+
+- 仅 **Windows + OneNote 桌面版**（Microsoft 365 / OneNote 2016，Office16），不支持「OneNote for Windows 10」UWP 版。
+- 分区 ⇄ 文件夹按 **`新分区N` ⇄ `0N`** 对应（可用 `--section-prefix` 改前缀）。
+- 目标标题 = **完整文件名**（去扩展名，含 `NNN-` 编号前缀与 `_N` 拆分后缀）。
+- 按**页面显示顺序**与文件夹内 PDF 一一对齐；页数与文件数不符的分区会**中止并报警**，不会瞎对齐。
+
+```powershell
+$env:PYTHONUTF8=1   # 让中文输出不乱码
+
+# 只读探查：打印「高中数学教辅」下全部分区与每页标题
+uv run python onenote_sync_titles.py --list
+
+# dry-run 预览（默认不写）：逐分区列出待删占位页 + 标题差异
+uv run python onenote_sync_titles.py --delete-placeholders --dedupe
+
+# 确认无误后正式执行
+uv run python onenote_sync_titles.py --delete-placeholders --dedupe --write
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--root` | 拆分文件夹根目录（默认 `books-done/{书名}_拆分`） |
+| `--section-prefix` | 分区名前缀（默认 `新分区`，自动忽略其后的空格） |
+| `--list` | 只读：打印分区与每页标题后退出 |
+| `--delete-placeholders` | 删除每个分区开头的空白占位页 |
+| `--dedupe` | 当某分区页数**正好是文件数 2 倍**（误打印两遍）时，删除后一份重复块 |
+| `--write` | 真正写入（缺省为 dry-run 只预览） |
+
+> **安全**：所有删除都进 OneNote **回收站**（可恢复）；标题改动可手动撤销。务必先看 dry-run 再加 `--write`。
+
 ---
 
 ## 进度管理（Excel）
@@ -182,9 +227,12 @@ uv run python split_pdf.py "书名" --level 3 --max-pages 100
 ├── split_pdf.py         # Pipeline 2：单本拆分（命令行）
 ├── split_all.py         # Pipeline 2：批量拆分（读 Excel）
 │
+├── onenote_sync_titles.py  # Pipeline 4：OneNote 本地整理（CLI）
+│
 ├── ai_parser.py         # OCR + 目录解析逻辑
 ├── llm_client.py        # LLM 客户端适配层
 ├── pdf_utils.py         # PDF 渲染与书签写入
+├── onenote_client.py    # OneNote 桌面版 COM 接口薄封装（Pipeline 4）
 ├── registry.py          # 状态管理（读写 Excel / state.json 兜底）
 │
 ├── pyproject.toml       # 项目依赖

@@ -1,7 +1,7 @@
 [project]
 name = "pdf-toc"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.4.0"
+description = "PDF 目录识别 + 书签 + 按章节拆分 + OneNote 本地整理"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -10,4 +10,6 @@ dependencies = [
     "openpyxl>=3.1.5",
     "pymupdf>=1.27.2.3",
     "python-dotenv>=1.2.2",
+    # Pipeline 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）
+    "comtypes>=1.4.16; sys_platform == 'win32'",
 ]

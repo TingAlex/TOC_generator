@@ -2,7 +2,7 @@
 
 ## 系统概览
 
-本项目包含两条独立的处理流水线，共享一套 Excel 状态管理：
+本项目包含两条共享 Excel 状态的核心流水线（书签、拆分），外加一个独立的 OneNote 收尾工具（Pipeline 4，不依赖 Excel 状态）：
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -19,6 +19,12 @@
 │                     Pipeline 2：拆分                      │
 │  books-done/*.pdf + toc_parsed.txt → 按章节拆分子 PDF      │
 │  （可选）单文件超限时进一步切为 _1/_2/… 多份               │
+└───────────────────────────┬─────────────────────────────┘
+                            │  OneNote Batch 导入（外部，Pipeline 3）
+┌───────────────────────────▼─────────────────────────────┐
+│              Pipeline 4：OneNote 本地整理                  │
+│  本地 COM 读分区/页 → 删占位页 · 去重 · 按文件名核对改标题  │
+│  数据源是 OneNote 本地缓存 + 拆分文件夹，不读 Excel 状态    │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -35,6 +41,7 @@
 | `init_work.py` | 扫描 books-todo/，将 state.json 数据迁移并写入 Excel；新书入库时重跑 |
 | `split_pdf.py` | Pipeline 2 单本命令行入口；同时也暴露 `run_split()` 供 split_all 调用 |
 | `split_all.py` | Pipeline 2 批量入口；读 Excel 配置，顺序处理所有未完成书本 |
+| `onenote_sync_titles.py` | Pipeline 4 入口；按文件夹核对 OneNote 页标题、删占位页、去重；默认 dry-run，`--write` 才落盘 |
 
 ### 核心库
 
@@ -44,6 +51,7 @@
 | `ai_parser.py` | 调用 OCR 模型识别图片文字；调用 LLM 将 OCR 文本解析为结构化目录 |
 | `llm_client.py` | LLM 适配层；统一封装硅基流动 / DeepSeek / Anthropic / OpenAI 四种 provider |
 | `pdf_utils.py` | PDF 工具函数：渲染页面为图片、写入书签 |
+| `onenote_client.py` | OneNote 桌面版 COM 接口薄封装：读层级、读/写页标题、删页（送回收站）、占位页判定 |
 
 ---
 
@@ -193,6 +201,73 @@ for i in range(n_parts):
 
 ---
 
+## Pipeline 4：OneNote 本地整理
+
+把拆分文件夹用 OneNote Batch 导入后，对每个分区做收尾核对。**纯本地、离线**：通过 OneNote
+桌面版 COM 接口操作本地缓存，不读 Excel 状态、不走网络（可在关闭同步时安全运行，改动后续随同步上传）。
+
+### 数据流
+
+```
+OneNote 本地缓存                         books-done/{书名}_拆分/0N/
+    │  GetHierarchy()  [onenote_client]      │  *.pdf（文件名为目标标题）
+    ▼                                        ▼
+笔记本 → 分区 → 页（按显示顺序）         期望标题列表（按 NNN 前缀排序）
+    └──────────────┬──────────────────────────┘
+                   │  分区「新分区N」⇄ 文件夹「0N」
+                   ▼
+        ① 删开头空白占位页（is_blank_placeholder）
+        ② 去重（页数 == 2× 文件数 时删后一份）
+        ③ 页数 == 文件数 → 按位置一一对齐
+        ④ 当前标题 != 期望 → UpdatePageContent 改标题（幂等）
+```
+
+### 对齐规则
+
+- **分区 ⇄ 文件夹**：`新分区N` ⇄ `0N`（解析分区名时忽略前缀后的空格，如 `新分区 7` → 7）。
+- **目标标题** = PDF 文件名去扩展名（保留 `NNN-` 编号前缀与 `_N` 拆分后缀）。
+- **按显示顺序对齐**：依赖 OneNote 页顺序 == 打印（文件名）顺序。页数与文件数不符的分区**中止并报警**，绝不错位改名。
+
+### 占位页判定（`is_blank_placeholder`）
+
+双保险，避免误删真实首页：
+
+1. 标题属于占位标题集合（`无标题页` / `无标题` / `Untitled page` / 空 …，不区分大小写）；**且**
+2. `GetPageContent` 中无 `<one:Image>`、无非空 `<one:T>`。
+
+> 打印页必含图片，绝不会被误判为占位页。失败未改名的页则显示 OneNote 默认标题「打印输出」，会被第 ④ 步改正。
+
+### 去重算法（`--dedupe`）
+
+仅处理「同一批被误打印两遍」这一确定场景：
+
+```python
+if dedupe and expected and len(pages) == 2 * len(expected):
+    delete(pages[len(expected):])   # 删后一份重复块（进回收站）
+    pages = pages[:len(expected)]   # 保留前一份，继续对齐改标题
+```
+
+只在页数**正好是文件数 2 倍**时触发；其它数量不符仍按报警中止处理。
+
+### COM 接入要点（`onenote_client.py`）
+
+| 坑 / 要点 | 处理 |
+|-----------|------|
+| comtypes 默认晚绑定，OneNote 报 `TYPE_E_LIBNOTREGISTERED`（“库没有注册”） | 用 `GetModule(("{0EA692EE-…}",1,1))`（OneNote 15.0 类型库）强制**早绑定**，再 `CreateObject(..., interface=mod.IApplication)` |
+| `DeleteHierarchy` / `UpdatePageContent` 的 DATE 参数，comtypes 默认值是 `datetime`，与 ctypes 签名（实数）冲突 | 显式传 `0.0`（= 不校验修改时间）：`DeleteHierarchy(id, 0.0, False)`、`UpdatePageContent(xml, 0.0, XS_2013, True)` |
+| 删除安全性 | `deletePermanently=False` → 进 OneNote 回收站，可恢复 |
+| 改标题不伤正文 | `UpdatePageContent` 只提交含 `ID` 与 `Title` 的最小 Page XML，仅替换标题，图片内容不动 |
+| 中文控制台乱码 | 运行前 `$env:PYTHONUTF8=1` |
+
+> 仅支持 OneNote 桌面版（Office16，ProgID `OneNote.Application`，CLSID `{DC67E480-…}`）；不支持 UWP「OneNote for Windows 10」。
+
+### 安全机制
+
+- 默认 **dry-run**，`--write` 才落盘；推荐先 `--list` / dry-run 核对对照表。
+- 所有删除进**回收站**，标题改动可手动撤销。
+
+---
+
 ## 依赖
 
 | 包 | 用途 |
@@ -202,3 +277,4 @@ for i in range(n_parts):
 | `anthropic` | 调用 Anthropic Claude |
 | `openpyxl` | 读写 Excel 配置文件 |
 | `python-dotenv` | 从 `.env` 加载 API Key |
+| `comtypes` | Pipeline 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版） |
