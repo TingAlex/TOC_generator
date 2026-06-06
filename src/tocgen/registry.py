@@ -1,13 +1,15 @@
 """
-状态管理：以 books-work/books_config.xlsx 为唯一存储。
-Excel 不存在时（如新机器首次运行，books-work/ 不入库），save() 会先自动
-建好空表骨架（经 init_work.ensure_books_config）再写入，无需手动初始化。
+每本书的状态读写，以 books-work/books_config.xlsx 为唯一存储。
+
+Excel 不存在时（如新机器首次运行，books-work/ 不入库），save() 会先经
+bookconfig.ensure_books_config() 建好空表骨架再写入，无需手动初始化。
+
+state dict 字段 ←→ Excel 列名见 _STATE_TO_COL。书本主键统一为 "{书名}.pdf"。
 """
 
-from pathlib import Path
+from . import paths
 
-WORK_DIR    = Path("books-work")
-BOOKS_CONFIG = WORK_DIR / "books_config.xlsx"
+BOOKS_CONFIG = paths.BOOKS_CONFIG_PATH
 
 # state dict 字段 → Excel 列名
 _STATE_TO_COL = {
@@ -19,12 +21,6 @@ _STATE_TO_COL = {
     "bookmarks_added": "bookmarks_added",
     "bookmark_count":  "bookmark_count",
 }
-
-
-# ── 内部工具 ───────────────────────────────────────────────────────────────
-
-def _stem(book_name: str) -> str:
-    return book_name.removesuffix(".pdf")
 
 
 def _parse_toc_pages(val) -> list[int] | None:
@@ -48,18 +44,17 @@ def _toc_pages_to_str(val) -> str:
 # ── 公开 API ───────────────────────────────────────────────────────────────
 
 def load() -> dict:
-    """聚合所有书本状态为 {book_name.pdf: state_dict}。
-    读 books_config.xlsx；Excel 不存在时返回空（尚无任何书本状态）。"""
+    """聚合所有书本状态为 {书名.pdf: state_dict}。Excel 不存在则返回空。"""
     if BOOKS_CONFIG.exists():
         return _load_from_excel()
     return {}
 
 
 def save(registry: dict) -> None:
-    """将书本状态写入 books_config.xlsx；Excel 不存在则先建空表骨架。"""
+    """写入 books_config.xlsx；Excel 不存在则先建空表骨架。"""
     if not BOOKS_CONFIG.exists():
-        import init_work
-        init_work.ensure_books_config()
+        from . import bookconfig
+        bookconfig.ensure_books_config()
     _save_to_excel(registry)
 
 
@@ -76,7 +71,7 @@ def _load_from_excel() -> dict:
         if not row[0]:
             continue
         d = dict(zip(headers, row))
-        book_name = str(d["书名"]) + ".pdf"
+        key = paths.book_key(str(d["书名"]))
         state: dict = {}
 
         toc_pages = _parse_toc_pages(d.get("toc_pages"))
@@ -88,7 +83,7 @@ def _load_from_excel() -> dict:
             if val is None:
                 continue
             if state_key in ("rendered", "ocr_done", "toc_parsed", "bookmarks_added"):
-                if val:  # 只写 True；False/空 不写入 state（等同于"未完成"）
+                if val:  # 只写 True；False/空 视为未完成
                     state[state_key] = bool(val)
             elif state_key == "offset":
                 state["offset"] = int(val)
@@ -96,7 +91,7 @@ def _load_from_excel() -> dict:
                 state["bookmark_count"] = int(val)
             # toc_pages 已单独处理
 
-        registry[book_name] = state
+        registry[key] = state
 
     wb.close()
     return registry
@@ -107,25 +102,21 @@ def _save_to_excel(registry: dict) -> None:
     wb = openpyxl.load_workbook(BOOKS_CONFIG)
     ws = wb.active
 
-    headers: dict[str, int] = {
-        cell.value: cell.column for cell in ws[1] if cell.value
+    headers: dict[str, int] = {cell.value: cell.column for cell in ws[1] if cell.value}
+    existing: dict[str, int] = {
+        str(row[0].value): row[0].row
+        for row in ws.iter_rows(min_row=3) if row[0].value
     }
-    # 书名 → 行号 映射
-    existing: dict[str, int] = {}
-    for row in ws.iter_rows(min_row=3):
-        if row[0].value:
-            existing[str(row[0].value)] = row[0].row
 
     for book_name, state in registry.items():
-        stem = _stem(book_name)
-        if stem not in existing:
-            # 新书：追加一行（仅书名，其余字段后续填入）
+        s = paths.stem(book_name)
+        if s not in existing:
             new_row = ws.max_row + 1
             if "书名" in headers:
-                ws.cell(row=new_row, column=headers["书名"], value=stem)
-            existing[stem] = new_row
+                ws.cell(row=new_row, column=headers["书名"], value=s)
+            existing[s] = new_row
 
-        target_row = existing[stem]
+        target_row = existing[s]
         for state_key, col_name in _STATE_TO_COL.items():
             if state_key not in state or col_name not in headers:
                 continue

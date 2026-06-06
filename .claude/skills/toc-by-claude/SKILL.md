@@ -6,14 +6,15 @@ description: 用 Claude 自身的多模态能力替代项目的 DeepSeek-OCR/V3 
 # Pipeline 1（Claude 版）：绕过 AI API，用 Claude 看图识别目录并加书签
 
 本 skill 固定一条流程：**不调用**项目里的 DeepSeek-OCR / DeepSeek-V3（即
-`ai_parser.py` / `llm_client.py` 那条 API 链路），改由**你（Claude）自己的多模态能力**
+`tocgen/ai_parse.py` / `tocgen/llm.py` 那条 API 链路），改由**你（Claude）自己的多模态能力**
 读取渲染出的目录页图片，直接产出结构化目录 `toc_parsed.txt`，再写入 PDF 书签。
 
-渲染和写书签这两个纯本地步骤由 `claude_toc_helper.py` 完成（它**不碰任何 API**）；
+渲染和写书签这两个纯本地步骤由 `toc-claude` 命令完成（它**不碰任何 API**）；
 中间「看图识目录」这一最费 token 的部分，**派发给一个子任务（subagent）专门完成**，
 让主对话保持清爽。
 
-> 运行前置：`$env:PYTHONUTF8=1`（中文不乱码）。所有命令用 `uv run python ...`。
+> 运行前置：`$env:PYTHONUTF8=1`（中文不乱码）。命令为 console_scripts（`toc-*`），
+> 在**项目根目录**下用 `uv run toc-...` 执行。
 > 产物与进度沿用现有约定：`books-work/{书名}/`、`books_config.xlsx`（详见 ARCHITECTURE.md）。
 
 ---
@@ -30,7 +31,7 @@ description: 用 Claude 自身的多模态能力替代项目的 DeepSeek-OCR/V3 
 ### 1. 渲染目录页（不调用 API）
 ```powershell
 $env:PYTHONUTF8=1
-uv run python claude_toc_helper.py render "书名" --pages 2-4
+uv run toc-claude render "书名" --pages 2-4
 ```
 输出 `books-work/{书名}/pages/page_NNN.png`，并记录 `toc_pages` + `rendered`。
 命令会把生成的 PNG 路径逐行打印出来——记下这些路径，传给下一步的子任务。
@@ -63,7 +64,7 @@ uv run python claude_toc_helper.py render "书名" --pages 2-4
 
 ### 4. 写入书签（不调用 API）
 ```powershell
-uv run python claude_toc_helper.py bookmarks "书名" --offset 18
+uv run toc-claude bookmarks "书名" --offset 18
 ```
 读 `toc_parsed.txt` → 写 `books-done/{书名}.pdf`，并记录
 `offset / ocr_done / toc_parsed / bookmarks_added / bookmark_count`。
@@ -71,16 +72,16 @@ uv run python claude_toc_helper.py bookmarks "书名" --offset 18
 
 ### 5. 收尾 / 交接
 告诉用户已完成，并提示后续流程（不属于本 skill）：
-1. `uv run python init_work.py`（首次入库或新书时刷新 Excel 配置）
-2. `uv run python split_all.py --book "书名"`（按目录拆分）
-3. `uv run python onenote_create_sections.py --book "书名" --write`（建分区组+空分区）
-4. 用户手动 OneNote Batch 导入 → 之后 `onenote_sync_titles.py` 收尾。
+1. `uv run toc-init`（首次入库或新书时刷新 Excel 配置）
+2. `uv run toc-split-all --book "书名"`（按目录拆分）
+3. `uv run toc-onenote-sections --book "书名" --write`（建分区组+空分区）
+4. 用户手动 OneNote Batch 导入 → 之后 `uv run toc-onenote-titles` 收尾。
 
 ---
 
 ## 注意
-- **绝不**调用 `main.py`（它带 API-Key 校验且会真去跑 DeepSeek OCR）；本 skill 全程只用
-  `claude_toc_helper.py` + Claude 自己的视觉，无需任何 `*_API_KEY`。
+- **绝不**调用 `toc-bookmarks`（它带 API-Key 校验且会真去跑 DeepSeek OCR）；本 skill 全程只用
+  `toc-claude` + Claude 自己的视觉，无需任何 `*_API_KEY`。
 - PowerShell 传空参数/特殊字符注意引号；书名含括号时用引号包裹。
 - 若某步已完成（registry 标记为 True）想重做，把 `books_config.xlsx` 对应列改回 False，或删 `toc_parsed.txt` 后重跑。
 - 全流程产物可逆、可手工编辑；`--offset` 拿不准时先渲染目录页看「某条目印刷页码 ↔ 它在 PDF 的实际页」推算。

@@ -1,7 +1,11 @@
-import re
-from pathlib import Path
+"""
+AI 目录识别：OCR 图片 → 文字，文字 → 结构化目录条目。
 
-from llm_client import get_client
+只负责「调模型 + 拼 prompt」；条目的解析/校验复用 toc 模块（单一实现）。
+"""
+
+from .llm import get_client
+from . import toc
 
 SYSTEM_PROMPT = """你是PDF目录结构提取助手。用户会提供目录页的OCR识别文字，你需要提取目录条目并按格式输出。
 
@@ -22,7 +26,7 @@ USER_PROMPT = '请识别以上所有目录页中的全部目录条目，按顺�
 
 
 def ocr_pages(rendered: list[tuple[int, bytes]]) -> str:
-    """OCR step only: send images to OCR model, return raw text."""
+    """仅 OCR：把图片送 OCR 模型，返回原始文字。"""
     images = [data for _, data in rendered]
     client = get_client()
     print("  OCR 识别中...")
@@ -33,42 +37,16 @@ def ocr_pages(rendered: list[tuple[int, bytes]]) -> str:
 
 
 def parse_toc_text(ocr_text: str) -> list[dict]:
-    """Parse step only: convert OCR text to TOC entries."""
+    """仅解析：把 OCR 文字转为目录条目（解析/校验走 toc 模块）。"""
     client = get_client()
     print("  解析目录结构中...")
     if hasattr(client, "parse_text"):
         raw = client.parse_text(SYSTEM_PROMPT, USER_PROMPT, ocr_text)
     else:
         raw = client.chat_with_images(SYSTEM_PROMPT, USER_PROMPT, [])
-    return _parse_lines(raw)
+    return toc.parse_text(raw)
 
 
 def parse_toc_from_images(rendered: list[tuple[int, bytes]]) -> list[dict]:
-    """Combined OCR + parse (kept for backward compatibility)."""
-    ocr_text = ocr_pages(rendered)
-    return parse_toc_text(ocr_text)
-
-
-def _parse_lines(text: str) -> list[dict]:
-    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    entries = []
-    for line in text.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split("|", 2)
-        if len(parts) != 3:
-            continue
-        level_str, title, page_str = parts
-        try:
-            level = int(level_str.strip())
-            page = int(re.sub(r"[^\d]", "", page_str.strip()) or "0")
-        except ValueError:
-            continue
-        title = title.strip()
-        if title and 1 <= level <= 3:
-            entries.append({"level": level, "title": title, "page": page})
-
-    if not entries:
-        raise ValueError(f"未能从响应中提取任何目录条目。\n响应前 200 字符：{text[:200]}")
-    return entries
+    """OCR + 解析合并（向后兼容）。"""
+    return parse_toc_text(ocr_pages(rendered))

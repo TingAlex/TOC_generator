@@ -1,33 +1,15 @@
-"""
-从 OneNote 指定分区中删除「作为附件误插入的源文件」（默认只删 .pdf），保留打印出来的页面图片。
+"""toc-onenote-strip —— Pipeline 4 子工具：从指定分区删除「误插入的源文件附件」
+（默认仅 .pdf），保留打印页图片。纯本地离线（COM），默认 dry-run。
 
-背景：用 OneNote Batch 导入拆分文件夹时，即便勾选「不插入 PDF 源文件」，源 PDF 仍被作为附件
-嵌进了每一页，导致笔记本体积暴涨。本工具逐分区、逐页找出这些附件并删除（仅删附件对象，不动图片）。
-
-本地离线操作（OneNote 桌面 COM 接口），不走网络，符合“关闭同步”状态。删除走 OneNote 内部对象删除，
-可在 OneNote 中 Ctrl+Z 撤销或从页面历史/回收站恢复。
-
-用法：
-    # 1) 只读探查：列出目标分区每页识别出的附件（名字 + 来源路径），不删
-    uv run python onenote_strip_files.py --sections "新分区1" --list
-
-    # 2) dry-run 预览（默认，不写）：列出将删除的附件对照表
-    uv run python onenote_strip_files.py --sections "新分区1"
-
-    # 3) 正式删除（建议先在单个分区验证）
-    uv run python onenote_strip_files.py --sections "新分区1" --write
-
-    # 4) 批量
-    uv run python onenote_strip_files.py --sections "新分区1,新分区2,新分区3" --write
-
-分区按**分区名**精确匹配（逗号分隔）。--ext 可指定扩展名（默认 pdf，逗号分隔）。
+    toc-onenote-strip --sections "新分区 1" --list
+    toc-onenote-strip --sections "新分区 1,新分区 2" --write
+    toc-onenote-strip --section-group "书名" --sections "01,02" --write
 """
 
 import argparse
 
-from onenote_client import OneNoteClient, Section
-
-DEFAULT_NOTEBOOK = "高中数学教辅"
+from ..onenote.client import OneNoteClient, Section
+from ..onenote.common import DEFAULT_NOTEBOOK, resolve_scope
 
 
 def parse_exts(raw: str) -> set[str]:
@@ -35,18 +17,15 @@ def parse_exts(raw: str) -> set[str]:
     out = set()
     for part in raw.split(","):
         p = part.strip().lower()
-        if not p:
-            continue
-        out.add(p if p.startswith(".") else "." + p)
+        if p:
+            out.add(p if p.startswith(".") else "." + p)
     return out
 
 
 def process_section(client: OneNoteClient, sec: Section,
                     exts: set[str], list_only: bool, write: bool) -> dict:
-    """处理单个分区，返回统计。"""
     print(f"\n[{sec.name}]（{len(sec.pages)} 页）")
     stats = {"hits": 0, "deleted": 0}
-
     for i, pg in enumerate(sec.pages, 1):
         files = client.list_inserted_files(pg.id, exts)
         if not files:
@@ -68,32 +47,30 @@ def process_section(client: OneNoteClient, sec: Section,
         print("    （未发现匹配的附件）")
     else:
         verb = "已删" if write and not list_only else "命中"
-        print(f"    小结：{verb} {stats['deleted'] if write and not list_only else stats['hits']} 个附件")
+        n = stats["deleted"] if write and not list_only else stats["hits"]
+        print(f"    小结：{verb} {n} 个附件")
     return stats
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--notebook", default=DEFAULT_NOTEBOOK)
     parser.add_argument("--sections", default="",
-                        help="目标分区名，逗号分隔（如 '新分区1,新分区2'）")
+                        help="目标分区名，逗号分隔（如 '新分区 1,新分区 2'）")
     parser.add_argument("--section-group", default=None,
-                        help="只在该分区组内按名匹配分区（配合 Pipeline 2.5 的「书名分区组」）；"
-                             "缺省在全部分区（含组内）按名匹配")
+                        help="只在该分区组内按名匹配分区（缺省全部分区）")
     parser.add_argument("--ext", default="pdf",
                         help="要删除的附件扩展名，逗号分隔（默认 pdf）")
     parser.add_argument("--list", action="store_true", dest="list_only",
                         help="只读探查：列出每页识别出的附件后退出，不删")
-    parser.add_argument("--write", action="store_true",
-                        help="真正删除（默认 dry-run 只预览）")
+    parser.add_argument("--write", action="store_true", help="真正删除（默认 dry-run 只预览）")
     args = parser.parse_args()
 
     exts = parse_exts(args.ext)
     if not exts:
         print("--ext 为空，无可删除的扩展名。")
         return
-
     want_names = [s.strip() for s in args.sections.split(",") if s.strip()]
     if not want_names:
         print("请用 --sections 指定要处理的分区名（逗号分隔）。")
@@ -108,34 +85,19 @@ def main():
             print(f"  · {n.name}")
         return
 
-    if args.list_only:
-        mode = "只读探查（--list）"
-    elif args.write:
-        mode = "写入（删除）"
-    else:
-        mode = "dry-run（不写）"
-    # 分区组感知：限定在指定分区组内按名匹配，避免多本书同名 0N 分区混淆
-    if args.section_group:
-        grp = client.find_section_group(nb, args.section_group)
-        if not grp:
-            print(f"未找到分区组「{args.section_group}」。可先用其他工具 --list 查看。")
-            return
-        scope_sections = grp.sections
-        scope_desc = f"分区组「{grp.name}」"
-    else:
-        scope_sections = nb.sections
-        scope_desc = "全部分区（含组内）"
-
-    print(f"笔记本：{nb.name}　范围：{scope_desc}　模式：{mode}　"
-          f"扩展名：{'/'.join(sorted(exts))}")
+    mode = "只读探查（--list）" if args.list_only else ("写入（删除）" if args.write else "dry-run（不写）")
+    scope = resolve_scope(client, nb, args.section_group)
+    if scope is None:
+        return
+    scope_sections, scope_desc = scope
+    print(f"笔记本：{nb.name}　范围：{scope_desc}　模式：{mode}　扩展名：{'/'.join(sorted(exts))}")
 
     sec_by_name = {sec.name: sec for sec in scope_sections}
-
     total = {"hits": 0, "deleted": 0, "missing": 0}
     for name in want_names:
         sec = sec_by_name.get(name)
         if sec is None:
-            print(f"\n[{name}] ⚠ 笔记本中找不到此分区，跳过。")
+            print(f"\n[{name}] ⚠ 找不到此分区，跳过。")
             total["missing"] += 1
             continue
         s = process_section(client, sec, exts, args.list_only, args.write)
