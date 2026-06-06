@@ -42,6 +42,7 @@
 | `split_pdf.py` | Pipeline 2 单本命令行入口；同时也暴露 `run_split()` 供 split_all 调用 |
 | `split_all.py` | Pipeline 2 批量入口；读 Excel 配置，顺序处理所有未完成书本 |
 | `onenote_sync_titles.py` | Pipeline 4 入口；按文件夹核对 OneNote 页标题、删占位页、去重；默认 dry-run，`--write` 才落盘 |
+| `onenote_strip_files.py` | Pipeline 4 子工具；从指定分区删除「误插入的源文件附件」（默认仅 .pdf），保留打印图片；默认 dry-run，`--write` 才删 |
 
 ### 核心库
 
@@ -51,7 +52,7 @@
 | `ai_parser.py` | 调用 OCR 模型识别图片文字；调用 LLM 将 OCR 文本解析为结构化目录 |
 | `llm_client.py` | LLM 适配层；统一封装硅基流动 / DeepSeek / Anthropic / OpenAI 四种 provider |
 | `pdf_utils.py` | PDF 工具函数：渲染页面为图片、写入书签 |
-| `onenote_client.py` | OneNote 桌面版 COM 接口薄封装：读层级、读/写页标题、删页（送回收站）、占位页判定 |
+| `onenote_client.py` | OneNote 桌面版 COM 接口薄封装：读层级、读/写页标题、删页（送回收站）、占位页判定、列出/删除页内嵌入附件 |
 
 ---
 
@@ -260,6 +261,19 @@ if dedupe and expected and len(pages) == 2 * len(expected):
 | 中文控制台乱码 | 运行前 `$env:PYTHONUTF8=1` |
 
 > 仅支持 OneNote 桌面版（Office16，ProgID `OneNote.Application`，CLSID `{DC67E480-…}`）；不支持 UWP「OneNote for Windows 10」。
+
+### 子工具：删除误插入的源文件附件（`onenote_strip_files.py`）
+
+OneNote Batch 导入时即便取消勾选「插入 PDF 源文件」，仍可能把源 PDF 作为**附件**嵌进每一页，
+使笔记本体积暴涨。本子工具从**按名指定的分区**（`--sections 名1,名2`）逐页删除这些附件，
+默认只删 `.pdf`（`--ext` 可改），**保留打印页图片**。
+
+- 识别：页 XML 里附件是 `<one:InsertedFile preferredName="x.pdf">`，自身一般不带 objectID，
+  objectID 在外层 `<one:OE>` 上 → 向上找最近带 objectID 的祖先 OE 作为删除目标
+  （`onenote_client.list_inserted_files`）。
+- **安全护栏**：若该祖先 OE 子树内含 `<one:Image>`（打印图片），则跳过，绝不连带删图片。
+- 删除：`DeletePageContent(pageId, objectId, 0.0, True)`（DATE 参数同样传 `0.0`）。
+- 体积回收由 OneNote 后台压缩完成，可能略有延迟。
 
 ### 安全机制
 

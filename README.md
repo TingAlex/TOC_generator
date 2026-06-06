@@ -33,6 +33,7 @@ books-todo/*.pdf
       │
       ▼  python onenote_sync_titles.py   【Pipeline 4：OneNote 本地整理】
          核对/改正页标题 · 删除新分区占位页 · 去重（误打印两遍）
+         （另：onenote_strip_files.py 删除导入时误插入的 PDF 源文件附件，瘦身笔记本）
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
@@ -189,6 +190,33 @@ uv run python onenote_sync_titles.py --delete-placeholders --dedupe --write
 
 > **安全**：所有删除都进 OneNote **回收站**（可恢复）；标题改动可手动撤销。务必先看 dry-run 再加 `--write`。
 
+### Pipeline 4 子工具：删除误插入的 PDF 源文件附件
+
+用 OneNote Batch 导入时，**即使取消勾选「插入 PDF 源文件」，源 PDF 仍可能被作为附件嵌进每一页**，导致笔记本体积暴涨。本工具从指定分区逐页删除这些附件，**只删附件、保留打印出来的页面图片**。
+
+```powershell
+$env:PYTHONUTF8=1
+
+# 只读探查：列出目标分区每页识别出的 PDF 附件（名字 + 来源路径），不删
+uv run python onenote_strip_files.py --sections "新分区 1" --list
+
+# dry-run 预览（默认不写）
+uv run python onenote_strip_files.py --sections "新分区 1"
+
+# 确认无误后正式删除（建议先单分区验证，再批量）
+uv run python onenote_strip_files.py --sections "新分区 1,新分区 2" --write
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--sections` | 目标**分区名**，逗号分隔（精确匹配，注意 Batch 生成的分区名是 `新分区 N`，**带空格**） |
+| `--ext` | 要删除的附件扩展名，逗号分隔（默认 `pdf`） |
+| `--list` | 只读：列出每页识别出的附件后退出 |
+| `--write` | 真正删除（缺省为 dry-run 只预览） |
+
+> **安全机制**：每个附件嵌在独立的 `OE` 对象里，工具只删该对象；若对象子树内含打印图片则**跳过**，绝不误删页面图片。删除可在 OneNote 内 Ctrl+Z 撤销或从页面历史/回收站恢复。体积回收由 OneNote 后台压缩完成，可能略有延迟。
+
 ---
 
 ## 进度管理（Excel）
@@ -228,6 +256,7 @@ uv run python onenote_sync_titles.py --delete-placeholders --dedupe --write
 ├── split_all.py         # Pipeline 2：批量拆分（读 Excel）
 │
 ├── onenote_sync_titles.py  # Pipeline 4：OneNote 本地整理（CLI）
+├── onenote_strip_files.py  # Pipeline 4 子工具：删除误插入的 PDF 源文件附件（CLI）
 │
 ├── ai_parser.py         # OCR + 目录解析逻辑
 ├── llm_client.py        # LLM 客户端适配层

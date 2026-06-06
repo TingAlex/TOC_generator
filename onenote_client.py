@@ -49,6 +49,14 @@ class Page:
 
 
 @dataclass
+class InsertedFile:
+    """页内作为附件嵌入的源文件（OneNote Batch 导入时连同打印图片一起塞进来的）。"""
+    object_id: str    # 可删除对象的 objectID（最近一个带 objectID 的祖先 OE）
+    name: str         # preferredName，如 "117-4.4.1.pdf"
+    path_source: str  # pathSource，导入时的源文件磁盘路径（可能为空）
+
+
+@dataclass
 class Section:
     id: str
     name: str
@@ -115,6 +123,54 @@ class OneNoteClient:
             if (t.text or "").strip():
                 return False
         return True
+
+    # ── 嵌入附件：列出 / 删除 ────────────────────────────────────────────
+    def list_inserted_files(self, page_id: str,
+                            exts: set[str] | None = None) -> list[InsertedFile]:
+        """
+        列出页内可删除的嵌入文件附件（默认只挑 .pdf 源文件）。
+
+        OneNote 页 XML 里附件是 `<one:InsertedFile preferredName="x.pdf" pathSource="...">`，
+        它本身一般不带 objectID —— objectID 在外层 `<one:OE>` 上。这里自附件向上找最近一个
+        带 objectID 的祖先 OE 作为删除目标；若该祖先子树里含 `<one:Image>`（打印图片），则
+        跳过（绝不连带删图片），保证只删纯附件。
+        """
+        if exts is None:
+            exts = {".pdf"}
+        exts = {e.lower() if e.startswith(".") else "." + e.lower() for e in exts}
+
+        xml = self._app.GetPageContent(page_id, PI_BASIC, XS_2013)
+        root = ET.fromstring(xml)
+        # ElementTree 无父指针，先建子→父映射
+        parent = {child: el for el in root.iter() for child in el}
+
+        results: list[InsertedFile] = []
+        for f in root.iter(f"{{{ONE_NS}}}InsertedFile"):
+            name = f.get("preferredName", "")
+            src = f.get("pathSource", "")
+            ext_src = (name or src).lower()
+            if not any(ext_src.endswith(e) for e in exts):
+                continue
+            # 向上找最近带 objectID 的祖先（含自身）
+            node = f
+            obj_id = None
+            while node is not None:
+                if node.get("objectID"):
+                    obj_id = node.get("objectID")
+                    break
+                node = parent.get(node)
+            if obj_id is None:
+                continue  # 没有可删除的对象 ID，跳过
+            # 安全护栏：删除目标子树内若含图片则放弃（不误删打印页）
+            if node.find(f".//{{{ONE_NS}}}Image") is not None:
+                continue
+            results.append(InsertedFile(object_id=obj_id, name=name, path_source=src))
+        return results
+
+    def delete_page_content(self, page_id: str, object_id: str) -> None:
+        """删除页内某个对象（如嵌入文件附件）。"""
+        # 参数：pageId, objectId, dateExpectedLastModified(0.0=不校验), force=True
+        self._app.DeletePageContent(page_id, object_id, 0.0, True)
 
     # ── 写标题 ───────────────────────────────────────────────────────────
     def set_page_title(self, page_id: str, title: str) -> None:
