@@ -1,0 +1,14 @@
+# 统一行尾：仓库内一律存 LF，检出时按各机器设置自动转换。
+# 让行为跨机器确定，消除 Windows 上 LF/CRLF 的 diff 噪音与警告。
+* text=auto
+
+# 必须保持平台行尾的脚本
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.sh  text eol=lf
+
+# 二进制（不做行尾/diff 处理）——这些虽已 gitignore，仍显式标注以防误纳入
+*.pdf  binary
+*.xlsx binary
+*.png  binary
+*.jpg  binary
