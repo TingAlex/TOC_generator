@@ -78,6 +78,9 @@ def main():
     parser.add_argument("--notebook", default=DEFAULT_NOTEBOOK)
     parser.add_argument("--sections", default="",
                         help="目标分区名，逗号分隔（如 '新分区1,新分区2'）")
+    parser.add_argument("--section-group", default=None,
+                        help="只在该分区组内按名匹配分区（配合 Pipeline 2.5 的「书名分区组」）；"
+                             "缺省在全部分区（含组内）按名匹配")
     parser.add_argument("--ext", default="pdf",
                         help="要删除的附件扩展名，逗号分隔（默认 pdf）")
     parser.add_argument("--list", action="store_true", dest="list_only",
@@ -111,9 +114,22 @@ def main():
         mode = "写入（删除）"
     else:
         mode = "dry-run（不写）"
-    print(f"笔记本：{nb.name}　模式：{mode}　扩展名：{'/'.join(sorted(exts))}")
+    # 分区组感知：限定在指定分区组内按名匹配，避免多本书同名 0N 分区混淆
+    if args.section_group:
+        grp = client.find_section_group(nb, args.section_group)
+        if not grp:
+            print(f"未找到分区组「{args.section_group}」。可先用其他工具 --list 查看。")
+            return
+        scope_sections = grp.sections
+        scope_desc = f"分区组「{grp.name}」"
+    else:
+        scope_sections = nb.sections
+        scope_desc = "全部分区（含组内）"
 
-    sec_by_name = {sec.name: sec for sec in nb.sections}
+    print(f"笔记本：{nb.name}　范围：{scope_desc}　模式：{mode}　"
+          f"扩展名：{'/'.join(sorted(exts))}")
+
+    sec_by_name = {sec.name: sec for sec in scope_sections}
 
     total = {"hits": 0, "deleted": 0, "missing": 0}
     for name in want_names:

@@ -48,18 +48,34 @@ def expected_titles(folder: Path) -> list[str]:
     return [p.stem for p in sorted(folder.glob("*.pdf"), key=sort_key)]
 
 
-def cmd_list(client: OneNoteClient, notebook_name: str) -> None:
+def cmd_list(client: OneNoteClient, notebook_name: str,
+             section_group: str | None = None) -> None:
     notebooks = client.get_hierarchy()
     print("可用笔记本：")
     for nb in notebooks:
         mark = " ←" if nb.name == notebook_name else ""
-        print(f"  · {nb.name}（{len(nb.sections)} 个分区）{mark}")
+        print(f"  · {nb.name}（{len(nb.sections)} 个分区，{len(nb.section_groups)} 个分区组）{mark}")
     nb = client.find_notebook(notebooks, notebook_name)
     if not nb:
         print(f"\n未找到笔记本「{notebook_name}」。")
         return
-    print(f"\n笔记本「{nb.name}」分区与页：")
-    for sec in nb.sections:
+
+    if section_group:
+        grp = client.find_section_group(nb, section_group)
+        if not grp:
+            print(f"\n未找到分区组「{section_group}」。")
+            return
+        print(f"\n笔记本「{nb.name}」分区组「{grp.name}」分区与页：")
+        sections = grp.sections
+    else:
+        if nb.section_groups:
+            print(f"\n笔记本「{nb.name}」分区组：")
+            for g in nb.section_groups:
+                print(f"  · {g.name}（{len(g.sections)} 个分区）")
+        print(f"\n笔记本「{nb.name}」直属分区与页：")
+        sections = [s for s in nb.sections]  # 扁平列表（含组内）
+
+    for sec in sections:
         print(f"\n  [{sec.name}]（{len(sec.pages)} 页）")
         for i, pg in enumerate(sec.pages, 1):
             title = pg.name.strip() or "（空白无标题）"
@@ -130,6 +146,9 @@ def main():
     parser.add_argument("--notebook", default=DEFAULT_NOTEBOOK)
     parser.add_argument("--root", type=Path, default=DEFAULT_ROOT)
     parser.add_argument("--section-prefix", default=DEFAULT_SECTION_PREFIX)
+    parser.add_argument("--section-group", default=None,
+                        help="只处理该分区组内的分区（配合 Pipeline 2.5 的「书名分区组」+ "
+                             "--section-prefix '' 使用）；缺省处理笔记本直属/全部分区")
     parser.add_argument("--delete-placeholders", action="store_true",
                         help="删除每个分区开头的空白无标题占位页")
     parser.add_argument("--dedupe", action="store_true",
@@ -143,7 +162,7 @@ def main():
     client = OneNoteClient()
 
     if args.list:
-        cmd_list(client, args.notebook)
+        cmd_list(client, args.notebook, args.section_group)
         return
 
     if not args.root.is_dir():
@@ -156,13 +175,25 @@ def main():
         print(f"未找到笔记本「{args.notebook}」。可先用 --list 查看可用笔记本。")
         return
 
+    # 分区组感知：限定在指定分区组内，避免多本书的同名 0N 分区混淆
+    if args.section_group:
+        grp = client.find_section_group(nb, args.section_group)
+        if not grp:
+            print(f"未找到分区组「{args.section_group}」。可先用 --list 查看。")
+            return
+        scope_sections = grp.sections
+        scope_desc = f"分区组「{grp.name}」"
+    else:
+        scope_sections = nb.sections
+        scope_desc = "全部分区（含组内）"
+
     mode = "写入" if args.write else "dry-run（不写）"
-    print(f"笔记本：{nb.name}　模式：{mode}　"
+    print(f"笔记本：{nb.name}　范围：{scope_desc}　模式：{mode}　"
           f"删占位页：{'是' if args.delete_placeholders else '否'}")
 
     # 分区编号 → Section
     sec_by_num = {}
-    for sec in nb.sections:
+    for sec in scope_sections:
         num = section_number(sec.name, args.section_prefix)
         if num is not None:
             sec_by_num[num] = sec

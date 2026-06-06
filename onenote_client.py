@@ -37,6 +37,12 @@ PI_BASIC = 0
 # XMLSchema 枚举
 XS_2013 = 2
 
+# CreateFileType 枚举（OpenHierarchy 的 cftIfNotExist：不存在时创建何种对象）
+CFT_NONE = 0
+CFT_NOTEBOOK = 1
+CFT_FOLDER = 2   # 分区组（section group，磁盘上是文件夹）
+CFT_SECTION = 3  # 分区（.one 文件）
+
 # OneNote 为空白页显示的占位标题（不区分大小写）
 _PLACEHOLDER_TITLES = {"", "无标题页", "无标题", "untitled page", "untitled"}
 
@@ -64,10 +70,30 @@ class Section:
 
 
 @dataclass
+class SectionGroup:
+    id: str
+    name: str
+    sections: list[Section] = field(default_factory=list)          # 组内直属分区
+    section_groups: list["SectionGroup"] = field(default_factory=list)  # 嵌套子分区组
+
+
+@dataclass
 class Notebook:
     id: str
     name: str
+    path: str = ""  # 笔记本位置：在线（OneDrive）笔记本以 https:// 开头，本地笔记本是磁盘路径
+    # sections：扁平递归列表，含直属分区 + 各分区组内所有分区（向后兼容，按名查找用）
     sections: list[Section] = field(default_factory=list)
+    section_groups: list[SectionGroup] = field(default_factory=list)  # 直属分区组（嵌套树）
+
+
+def _flatten_groups(groups: list[SectionGroup]) -> list[Section]:
+    """递归收集所有分区组内的分区，拼成扁平列表。"""
+    out: list[Section] = []
+    for g in groups:
+        out.extend(g.sections)
+        out.extend(_flatten_groups(g.section_groups))
+    return out
 
 
 class OneNoteClient:
@@ -86,25 +112,84 @@ class OneNoteClient:
         root = ET.fromstring(xml)
         notebooks = []
         for nb_el in root.iter(f"{{{ONE_NS}}}Notebook"):
-            nb = Notebook(id=nb_el.get("ID"), name=nb_el.get("name", ""))
-            # 分区可能直接挂在 Notebook 下，也可能在 SectionGroup 里，统一递归收集
-            for sec_el in nb_el.iter(f"{{{ONE_NS}}}Section"):
-                sec = Section(id=sec_el.get("ID"), name=sec_el.get("name", ""))
-                for pg_el in sec_el.iter(f"{{{ONE_NS}}}Page"):
-                    sec.pages.append(Page(
-                        id=pg_el.get("ID"),
-                        name=pg_el.get("name", ""),
-                        level=int(pg_el.get("pageLevel", "1")),
-                    ))
-                nb.sections.append(sec)
+            nb = Notebook(id=nb_el.get("ID"), name=nb_el.get("name", ""),
+                          path=nb_el.get("path", ""))
+            # 嵌套树（直属分区 + 直属分区组，分区组内再递归）
+            direct, nb.section_groups = self._parse_container(nb_el)
+            # 扁平递归列表：直属 + 各组内所有分区（向后兼容）
+            nb.sections = direct + _flatten_groups(nb.section_groups)
             notebooks.append(nb)
         return notebooks
+
+    def _parse_section(self, sec_el) -> Section:
+        sec = Section(id=sec_el.get("ID"), name=sec_el.get("name", ""))
+        for pg_el in sec_el.iter(f"{{{ONE_NS}}}Page"):
+            sec.pages.append(Page(
+                id=pg_el.get("ID"),
+                name=pg_el.get("name", ""),
+                level=int(pg_el.get("pageLevel", "1")),
+            ))
+        return sec
+
+    def _parse_container(self, el) -> tuple[list[Section], list[SectionGroup]]:
+        """解析容器（Notebook 或 SectionGroup）的**直属**分区与分区组（分区组内递归）。"""
+        sections = [self._parse_section(s)
+                    for s in el.findall(f"{{{ONE_NS}}}Section")]
+        groups = []
+        for sg_el in el.findall(f"{{{ONE_NS}}}SectionGroup"):
+            # 跳过回收站（isRecycleBin="true"）：里面是已删分区，不应纳入处理范围
+            if sg_el.get("isRecycleBin", "").lower() == "true":
+                continue
+            sg = SectionGroup(id=sg_el.get("ID"), name=sg_el.get("name", ""))
+            sg.sections, sg.section_groups = self._parse_container(sg_el)
+            groups.append(sg)
+        return sections, groups
+
+    def find_section_group(self, container, name: str) -> SectionGroup | None:
+        """在笔记本/分区组下按名递归查找分区组。container 需有 .section_groups。"""
+        for g in container.section_groups:
+            if g.name == name:
+                return g
+            sub = self.find_section_group(g, name)
+            if sub is not None:
+                return sub
+        return None
 
     def find_notebook(self, notebooks: list[Notebook], name: str) -> Notebook | None:
         for nb in notebooks:
             if nb.name == name:
                 return nb
         return None
+
+    # ── 创建层级（分区组 / 分区 / 在线笔记本） ───────────────────────────
+    def create_section_group(self, notebook_id: str, name: str) -> str:
+        """在笔记本下新建分区组，返回其 ID。路径相对于 notebook_id。"""
+        # OpenHierarchy(path, relativeToObjectID, [out]objectID, cftIfNotExist)
+        # comtypes 早绑定把 [out] objectID 转成返回值。
+        return self._app.OpenHierarchy(name, notebook_id, CFT_FOLDER)
+
+    def create_section(self, parent_id: str, name: str) -> str:
+        """
+        在父对象（笔记本或分区组）下新建分区，返回其 ID。
+
+        分区在磁盘上是 `.one` 文件，OpenHierarchy 的路径**必须带 `.one` 扩展名**
+        （分区组/文件夹则不带）；OneNote 显示时会去掉该扩展名。
+        """
+        path = name if name.lower().endswith(".one") else f"{name}.one"
+        return self._app.OpenHierarchy(path, parent_id, CFT_SECTION)
+
+    def create_online_notebook(self, name: str, sibling_of_path: str) -> str:
+        """
+        新建**在线**笔记本，做成现有在线笔记本的同级。
+
+        sibling_of_path 为参考在线笔记本的 path（OneDrive URL，形如
+        `https://d.docs.live.net/<id>/文档/某本子`）。取其父目录拼上 name 作为新笔记本路径，
+        从而落在同一 OneDrive 位置（联网笔记本），而非本地。
+        """
+        # 用 URL 的 '/' 分隔，绝不能用本地 os.path（会引入反斜杠）。
+        parent = sibling_of_path.rstrip("/").rsplit("/", 1)[0]
+        new_path = f"{parent}/{name}"
+        return self._app.OpenHierarchy(new_path, "", CFT_NOTEBOOK)
 
     # ── 占位页判定 ───────────────────────────────────────────────────────
     def is_blank_placeholder(self, page: Page) -> bool:

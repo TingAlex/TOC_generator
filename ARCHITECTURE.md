@@ -20,6 +20,12 @@
 │  books-done/*.pdf + toc_parsed.txt → 按章节拆分子 PDF      │
 │  （可选）单文件超限时进一步切为 _1/_2/… 多份               │
 └───────────────────────────┬─────────────────────────────┘
+                            │
+┌───────────────────────────▼─────────────────────────────┐
+│              Pipeline 2.5：OneNote 预建分区组              │
+│  按 0N 文件夹数，本地 COM 建「书名分区组」+ 空分区 01…0N   │
+│  （可选 --new-notebook 新建在线笔记本，同级于现有笔记本）  │
+└───────────────────────────┬─────────────────────────────┘
                             │  OneNote Batch 导入（外部，Pipeline 3）
 ┌───────────────────────────▼─────────────────────────────┐
 │              Pipeline 4：OneNote 本地整理                  │
@@ -41,6 +47,7 @@
 | `init_work.py` | 扫描 books-todo/，将 state.json 数据迁移并写入 Excel；新书入库时重跑 |
 | `split_pdf.py` | Pipeline 2 单本命令行入口；同时也暴露 `run_split()` 供 split_all 调用 |
 | `split_all.py` | Pipeline 2 批量入口；读 Excel 配置，顺序处理所有未完成书本 |
+| `onenote_create_sections.py` | Pipeline 2.5 入口；按 `0N` 文件夹数在指定笔记本建「书名分区组」+ 空分区 `01…0N`；分区组查重防重名；可 `--new-notebook` 新建在线笔记本；默认 dry-run，`--write` 才落盘 |
 | `onenote_sync_titles.py` | Pipeline 4 入口；按文件夹核对 OneNote 页标题、删占位页、去重；默认 dry-run，`--write` 才落盘 |
 | `onenote_strip_files.py` | Pipeline 4 子工具；从指定分区删除「误插入的源文件附件」（默认仅 .pdf），保留打印图片；默认 dry-run，`--write` 才删 |
 
@@ -52,7 +59,7 @@
 | `ai_parser.py` | 调用 OCR 模型识别图片文字；调用 LLM 将 OCR 文本解析为结构化目录 |
 | `llm_client.py` | LLM 适配层；统一封装硅基流动 / DeepSeek / Anthropic / OpenAI 四种 provider |
 | `pdf_utils.py` | PDF 工具函数：渲染页面为图片、写入书签 |
-| `onenote_client.py` | OneNote 桌面版 COM 接口薄封装：读层级、读/写页标题、删页（送回收站）、占位页判定、列出/删除页内嵌入附件 |
+| `onenote_client.py` | OneNote 桌面版 COM 接口薄封装：读层级（含笔记本 `path`）、读/写页标题、删页/删层级（送回收站）、占位页判定、列出/删除页内嵌入附件；**创建**分区组/分区/在线笔记本（`OpenHierarchy`） |
 
 ---
 
@@ -202,6 +209,49 @@ for i in range(n_parts):
 
 ---
 
+## Pipeline 2.5：OneNote 预建分区组 + 空分区
+
+拆分完成后、Batch 导入前的准备步。**纯本地离线**（OneNote 桌面 COM），按 `books-done/{书名}_拆分/`
+下的 `0N` 文件夹数量，在指定笔记本建「以书名命名的分区组」+ 同名空分区 `01…0N`。
+
+### 数据流
+
+```
+books-done/{书名}_拆分/0N/          OneNote 本地缓存
+    │  统计 0N 子文件夹               │  get_hierarchy() / get_section_groups()
+    ▼                               ▼
+分区名列表 [01…0N]              目标笔记本（按名查找；可 --new-notebook 新建在线）
+    └───────────────┬───────────────┘
+                    │  ① 分区组查重：已存在同名（书名）→ 中止报警
+                    │  ② create_section_group(notebookId, 书名)
+                    │  ③ 逐个 create_section(groupId, "0N")
+                    ▼
+        笔记本 → 分区组「书名」 → 空分区 01…0N
+```
+
+### 关键设计
+
+- **作用域隔离**：分区放进「书名分区组」，`01…0N` 名被该组隔离，不会与其它书的同名分区冲突；
+  唯一查重的是分区组名（=书名）本身 → 撞名即中止，绝不改动既有内容。
+- **新建在线笔记本**（`--new-notebook`）：取一个现有**在线**笔记本（`path` 以 `https://` 开头）的
+  OneDrive 路径，求父目录拼上新名，`OpenHierarchy(newUrl, "", cftNotebook)` → 落在同一云端位置，
+  而非本地笔记本。用 URL 的 `/` 分隔，不可用本地 `os.path`。
+- **增量、可逆**：只新增空对象；默认 dry-run，`--write` 才落盘；删除（如撤销）均进回收站。
+
+### COM 接入要点（创建相关，补充 onenote_client.py）
+
+| 坑 / 要点 | 处理 |
+|-----------|------|
+| 创建用 `OpenHierarchy(path, relativeToObjectID, [out]objectID, cftIfNotExist)`，`[out]` 在 comtypes 早绑定下转为返回值 | 调用只传 `(path, rel, cft)`，新 ID 取返回值 |
+| `CreateFileType` 枚举 | `cftNotebook=1` / `cftFolder=2`（分区组）/ `cftSection=3`（分区） |
+| **分区路径必须带 `.one` 扩展名**，否则 `OpenHierarchy` 抛 `COMError 0x80042004`；分区组/文件夹则**不带**扩展名 | `create_section` 自动补 `.one`；OneNote 显示时去掉 |
+| 取笔记本是否在线 | `get_hierarchy` 读出 Notebook 的 `path` 属性；在线笔记本以 `https://` 开头 |
+
+> 与 Pipeline 4 的兼容：分区名 `01…0N`，Batch 导入后
+> `onenote_sync_titles.py --section-group "书名" --section-prefix ""` 即可按 `0N ⇄ 文件夹` 对齐改标题。
+> Pipeline 4 已做**分区组感知**（见下）：`--section-group` 把处理范围限定在某分区组内，
+> 避免多本书的同名 `0N` 分区混淆。
+
 ## Pipeline 4：OneNote 本地整理
 
 把拆分文件夹用 OneNote Batch 导入后，对每个分区做收尾核对。**纯本地、离线**：通过 OneNote
@@ -262,6 +312,23 @@ if dedupe and expected and len(pages) == 2 * len(expected):
 
 > 仅支持 OneNote 桌面版（Office16，ProgID `OneNote.Application`，CLSID `{DC67E480-…}`）；不支持 UWP「OneNote for Windows 10」。
 
+### OneNote 开发环境须知（换机器开发必读）
+
+这些是踩过坑、单看代码不易复原的前提，换台电脑继续开发时务必照做：
+
+- **为什么走桌面 COM 而非 Graph API**：用户**刻意关闭 OneNote 同步**做离线编辑（避免导入/改名时的同步冲突）。
+  桌面 COM 操作**本地缓存**，离线可用、无需网络与鉴权；改动落本地，等重开同步再上传。Graph 则必须联网 + OAuth。
+- **平台限制**：仅 **Windows + OneNote 桌面版**（Microsoft 365 / OneNote 2016，Office16）。
+  **不支持**「OneNote for Windows 10」UWP 版（没有这套 COM 接口）。
+- **依赖用 `comtypes`（非 pywin32）**：comtypes 是纯 Python、开箱即用；本项目 Python 3.14 下 pywin32 装轮子麻烦。
+  COM 调用**必须早绑定**（见上表的类型库 GUID），否则 OneNote 报「库没有注册」。
+- **装依赖**：本项目 venv 由 `uv` 管理，**venv 里没有 pip**。加包请用 `uv add <pkg>`（写进 pyproject）后 `uv sync`，
+  或临时 `uv pip install <pkg>`；不要直接 `python -m pip`。
+- **运行前 `$env:PYTHONUTF8=1`**：否则中文页标题/分区名/书名路径在控制台和传参时易乱码。
+- **OneNote 默认标题约定**（判定逻辑依赖它们）：新建分区的空白占位页标题是 `无标题页`（**非空**）；
+  改名失败的打印页标题是 OneNote 默认的 `打印输出`。
+- **Batch 生成的分区名带空格**：是 `新分区 N`（如 `新分区 7`），不是 `新分区7`——按名匹配时注意。
+
 ### 子工具：删除误插入的源文件附件（`onenote_strip_files.py`）
 
 OneNote Batch 导入时即便取消勾选「插入 PDF 源文件」，仍可能把源 PDF 作为**附件**嵌进每一页，
@@ -291,4 +358,4 @@ OneNote Batch 导入时即便取消勾选「插入 PDF 源文件」，仍可能�
 | `anthropic` | 调用 Anthropic Claude |
 | `openpyxl` | 读写 Excel 配置文件 |
 | `python-dotenv` | 从 `.env` 加载 API Key |
-| `comtypes` | Pipeline 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版） |
+| `comtypes` | Pipeline 2.5 / 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32（Python 3.14 下更省事）；调用须早绑定，详见「OneNote 开发环境须知」 |

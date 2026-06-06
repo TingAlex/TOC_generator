@@ -28,8 +28,12 @@ books-todo/*.pdf
                002-第一节.pdf  ...
           02/  ...
       │
+      ▼  python onenote_create_sections.py   【Pipeline 2.5：导入前准备】
+         按 0N 文件夹数，在指定笔记本建「以书名命名的分区组」+ 对应空分区 01…0N
+         （可选 --new-notebook 新建在线笔记本）
+      │
       ▼  OneNote Batch 插件      【Pipeline 3：导入（外部）】
-         将 books-done/{书名}_拆分/ 导入 OneNote
+         将 books-done/{书名}_拆分/ 各文件夹导入对应分区
       │
       ▼  python onenote_sync_titles.py   【Pipeline 4：OneNote 本地整理】
          核对/改正页标题 · 删除新分区占位页 · 去重（误打印两遍）
@@ -149,6 +153,43 @@ uv run python split_pdf.py "书名" --level 3 --max-pages 100
 
 若需控制每次导入的页数（如 OneNote 每页限 20 页），在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`），超限章节将自动切为 `001-章节_1.pdf`、`001-章节_2.pdf` 等多份，每份均不超过该限制。
 
+### Pipeline 2.5：OneNote 预建分区组 + 空分区（导入前准备）
+
+拆分完成后、用 OneNote Batch 导入**之前**，本工具按 `books-done/{书名}_拆分/` 下的 `0N` 文件夹数量，
+在指定笔记本里建一个**以书名命名的分区组**，并在组内建好对应数量的空分区（命名与文件夹同名：`01`…`0N`）。
+这样你只需做 Batch 插入，其余前后流程都交给脚本。
+
+**纯本地离线**（OneNote 桌面 COM 接口），不走网络 Graph。把分区放进「以书名命名的分区组」里，
+`01…0N` 这些分区名天然被该组隔离，不会和其它书的同名分区冲突；唯一查重的是分区组名（书名）本身。
+
+```powershell
+$env:PYTHONUTF8=1
+
+# dry-run 预览（默认，不创建任何东西）
+uv run python onenote_create_sections.py --book "更高更妙"
+
+# 确认无误后正式创建
+uv run python onenote_create_sections.py --book "更高更妙" --write
+
+# 目标笔记本不存在 → 新建在线笔记本（同级于现有在线笔记本）
+uv run python onenote_create_sections.py --book "书名" --notebook "新本子" --new-notebook --write
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--book` | 书名，定位 `books-done/{书名}_拆分/`（支持部分匹配） |
+| `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--new-notebook` | 笔记本不存在时**新建在线笔记本**（做成现有在线笔记本的同级；否则中止报警） |
+| `--ref-notebook` | 新建时作「同级参考」的现有在线笔记本名（缺省自动取第一个在线笔记本） |
+| `--root` | 拆分根目录（默认 `books-done`） |
+| `--write` | 真正创建（缺省 dry-run 只预览） |
+
+> **安全**：默认 dry-run；创建为纯增量（只新增空分区组/空分区，不删不改既有内容）；
+> 若目标笔记本已存在同名（=书名）分区组，则**中止并报警**，绝不改动已有内容。
+>
+> **与 Pipeline 4 配合**：分区名为 `01…0N`，Batch 导入后用
+> `onenote_sync_titles.py --section-prefix ""` 即可按 `0N ⇄ 文件夹` 对齐改标题。
+
 ### Pipeline 4：OneNote 本地整理（核对标题 + 删占位页 + 去重）
 
 用 OneNote Batch 把拆分 PDF 导入后，常见两个收尾问题：
@@ -176,14 +217,18 @@ uv run python onenote_sync_titles.py --delete-placeholders --dedupe
 
 # 确认无误后正式执行
 uv run python onenote_sync_titles.py --delete-placeholders --dedupe --write
+
+# 配合 Pipeline 2.5 的「书名分区组」+ 01…0N 分区（分区组感知，避免多本书同名 0N 混淆）
+uv run python onenote_sync_titles.py --section-group "书名" --section-prefix "" --delete-placeholders --dedupe --write
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
 | `--root` | 拆分文件夹根目录（默认 `books-done/{书名}_拆分`） |
-| `--section-prefix` | 分区名前缀（默认 `新分区`，自动忽略其后的空格） |
-| `--list` | 只读：打印分区与每页标题后退出 |
+| `--section-prefix` | 分区名前缀（默认 `新分区`，自动忽略其后的空格；配合 Pipeline 2.5 的 `01…0N` 用 `""`） |
+| `--section-group` | 只处理该分区组内的分区（配合 Pipeline 2.5 的「书名分区组」；缺省处理全部分区） |
+| `--list` | 只读：打印分区组、分区与每页标题后退出 |
 | `--delete-placeholders` | 删除每个分区开头的空白占位页 |
 | `--dedupe` | 当某分区页数**正好是文件数 2 倍**（误打印两遍）时，删除后一份重复块 |
 | `--write` | 真正写入（缺省为 dry-run 只预览） |
@@ -211,6 +256,7 @@ uv run python onenote_strip_files.py --sections "新分区 1,新分区 2" --writ
 |------|------|
 | `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
 | `--sections` | 目标**分区名**，逗号分隔（精确匹配，注意 Batch 生成的分区名是 `新分区 N`，**带空格**） |
+| `--section-group` | 只在该分区组内按名匹配分区（配合 Pipeline 2.5 的「书名分区组」；缺省全部分区） |
 | `--ext` | 要删除的附件扩展名，逗号分隔（默认 `pdf`） |
 | `--list` | 只读：列出每页识别出的附件后退出 |
 | `--write` | 真正删除（缺省为 dry-run 只预览） |
@@ -255,13 +301,14 @@ uv run python onenote_strip_files.py --sections "新分区 1,新分区 2" --writ
 ├── split_pdf.py         # Pipeline 2：单本拆分（命令行）
 ├── split_all.py         # Pipeline 2：批量拆分（读 Excel）
 │
+├── onenote_create_sections.py  # Pipeline 2.5：预建分区组 + 空分区（CLI）
 ├── onenote_sync_titles.py  # Pipeline 4：OneNote 本地整理（CLI）
 ├── onenote_strip_files.py  # Pipeline 4 子工具：删除误插入的 PDF 源文件附件（CLI）
 │
 ├── ai_parser.py         # OCR + 目录解析逻辑
 ├── llm_client.py        # LLM 客户端适配层
 ├── pdf_utils.py         # PDF 渲染与书签写入
-├── onenote_client.py    # OneNote 桌面版 COM 接口薄封装（Pipeline 4）
+├── onenote_client.py    # OneNote 桌面版 COM 接口薄封装（Pipeline 2.5 / 4）
 ├── registry.py          # 状态管理（读写 Excel / state.json 兜底）
 │
 ├── pyproject.toml       # 项目依赖
