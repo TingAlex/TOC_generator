@@ -1,15 +1,14 @@
 """
-初始化工作配置：扫描 books-todo/ 中的 PDF，将 state.json 数据迁移到 Excel。
+初始化工作配置：扫描 books-todo/（与 books-done/）中的 PDF，登记到 Excel 配置。
 
 生成两个文件：
-  books-work/books_config.xlsx   — 每本书一行，含 state.json 所有字段 + 拆分配置
+  books-work/books_config.xlsx   — 每本书一行，含进度字段 + 拆分配置
   books-work/split_config.xlsx   — 全局拆分格式默认值（如不存在则创建）
 
 用法：
     python init_work.py
 """
 
-import json
 from pathlib import Path
 
 import openpyxl
@@ -72,74 +71,51 @@ def auto_width(ws, min_width=12, max_width=40):
         ws.column_dimensions[col_letter].width = max(min_width, min(width + 2, max_width))
 
 
-def read_state_json(book_name: str) -> dict:
-    """一次性迁移：从旧的 state.json 读取初始值，之后状态由 Excel 管理。"""
-    state_path = BOOKS_WORK / book_name / "state.json"
-    if not state_path.exists():
-        return {}
-    with state_path.open(encoding="utf-8") as f:
-        return json.load(f)
+def _build_skeleton_ws(ws) -> None:
+    """在工作表上写好表头（第1行）+ 说明（第2行）+ 冻结，无数据行。"""
+    ws.title = "书本配置"
+    for col_idx, (name, note, _default) in enumerate(BOOKS_COLS, 1):
+        style_header(ws.cell(row=1, column=col_idx, value=name))
+        style_note(ws.cell(row=2, column=col_idx, value=note))
+    ws.row_dimensions[1].height = 22
+    ws.row_dimensions[2].height = 40
+    ws.freeze_panes = "A3"
 
 
-def toc_pages_to_str(val) -> str:
-    if isinstance(val, list):
-        return ",".join(str(v) for v in val)
-    return str(val) if val is not None else ""
+def ensure_books_config() -> None:
+    """确保 books_config.xlsx 存在（仅表头骨架，无数据行）。
+    供 registry 冷启动（新机器、Excel 尚未生成）时自动调用。"""
+    BOOKS_WORK.mkdir(exist_ok=True)
+    if BOOKS_CONFIG_PATH.exists():
+        return
+    wb = openpyxl.Workbook()
+    _build_skeleton_ws(wb.active)
+    wb.save(BOOKS_CONFIG_PATH)
 
 
 def init_books_config(pdf_names: list[str]) -> None:
     """Create or update books_config.xlsx, adding new books without touching existing rows."""
     col_names = [c[0] for c in BOOKS_COLS]
-    col_notes = [c[1] for c in BOOKS_COLS]
-    col_defaults = {c[0]: c[2] for c in BOOKS_COLS}
 
-    existing_books: set[str] = set()
+    ensure_books_config()  # 没有则建空表骨架
+    wb = openpyxl.load_workbook(BOOKS_CONFIG_PATH)
+    ws = wb.active
 
-    if BOOKS_CONFIG_PATH.exists():
-        wb = openpyxl.load_workbook(BOOKS_CONFIG_PATH)
-        ws = wb.active
-        # Row 1 = headers, Row 2 = notes, Row 3+ = data
-        for row in ws.iter_rows(min_row=3, values_only=True):
-            if row[0]:
-                existing_books.add(str(row[0]))
-    else:
-        wb = openpyxl.Workbook()
-        ws = wb.active
-        ws.title = "书本配置"
+    # Row 1 = headers, Row 2 = notes, Row 3+ = data
+    existing_books: set[str] = {
+        str(row[0]) for row in ws.iter_rows(min_row=3, values_only=True) if row[0]
+    }
 
-        # Row 1: headers
-        for col_idx, name in enumerate(col_names, 1):
-            cell = ws.cell(row=1, column=col_idx, value=name)
-            style_header(cell)
-        ws.row_dimensions[1].height = 22
-
-        # Row 2: notes
-        for col_idx, note in enumerate(col_notes, 1):
-            cell = ws.cell(row=2, column=col_idx, value=note)
-            style_note(cell)
-        ws.row_dimensions[2].height = 40
-
-        ws.freeze_panes = "A3"
-
-    # Append new books
+    # Append new books（新书一律从默认值起步；进度由后续流程写回）
     added = 0
     for name in pdf_names:
         if name in existing_books:
             continue
 
-        state = read_state_json(name)
-        row_data = {
-            "书名":           name,
-            "offset":        state.get("offset", col_defaults["offset"]),
-            "toc_pages":     toc_pages_to_str(state.get("toc_pages", "")),
-            "split_level":   col_defaults["split_level"],
-            "rendered":      state.get("rendered", col_defaults["rendered"]),
-            "ocr_done":      state.get("ocr_done", col_defaults["ocr_done"]),
-            "toc_parsed":    state.get("toc_parsed", col_defaults["toc_parsed"]),
-            "bookmarks_added": state.get("bookmarks_added", col_defaults["bookmarks_added"]),
-            "bookmark_count":  state.get("bookmark_count", col_defaults["bookmark_count"]),
-            "拆分完成":       False,
-        }
+        row_data = {col: default for col, _note, default in BOOKS_COLS}
+        row_data["书名"] = name
+        row_data["toc_pages"] = ""
+        row_data["拆分完成"] = False
 
         row_values = [row_data[col] for col in col_names]
         ws.append(row_values)
@@ -206,9 +182,9 @@ def main() -> None:
                     seen.add(name)
                     pdf_names.append(name)
 
-    # Also pick up books that have a books-work directory but no PDF (OCR only done so far)
+    # Also pick up books that have a books-work directory but no PDF (识别目录已做、PDF 不在 todo/done)
     for d in sorted(BOOKS_WORK.iterdir()):
-        if d.is_dir() and d.name not in seen and (d / "state.json").exists():
+        if d.is_dir() and d.name not in seen and (d / "toc_parsed.txt").exists():
             seen.add(d.name)
             pdf_names.append(d.name)
 

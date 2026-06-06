@@ -17,7 +17,7 @@ DeepSeek-OCR + DeepSeek-V3（即 ai_parser.py / llm_client.py 那条 API 链路�
 
 说明：
 - 书名可带或不带 `.pdf`。源 PDF 优先取 books-todo/，回退 books-done/。
-- --pages / --offset 省略时，从 books_config.xlsx（或 state.json）已记录值读取。
+- --pages / --offset 省略时，从 books_config.xlsx 已记录值读取。
 - toc_parsed.txt 行格式：`{level}|{title}|{印刷页码}`（与项目其余部分一致）。
 """
 

@@ -77,7 +77,7 @@ def run_split(
     拆分一本书的 PDF。
 
     offset: 印刷页码偏移量（PDF页码 = 印刷页码 + offset）。
-            传 None 则自动从 state.json 读取，找不到则为 0。
+            传 None 则自动从 Excel 配置（books_config.xlsx）读取，找不到则为 0。
     返回生成的文件数。
     """
     toc_path = BOOKS_WORK / book_name / "toc_parsed.txt"
@@ -246,7 +246,7 @@ def main() -> None:
     parser.add_argument("--folder-digits", type=int, default=2,
                         help="批次文件夹编号位数（默认 2 → 01）")
     parser.add_argument("--offset", type=int, default=None,
-                        help="手动指定页码偏移量（不指定则从 state.json 读取）")
+                        help="手动指定页码偏移量（不指定则从 Excel 配置读取）")
     args = parser.parse_args()
 
     try:

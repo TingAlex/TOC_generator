@@ -323,7 +323,7 @@ uv run python onenote_strip_files.py --sections "新分区 1,新分区 2" --writ
 ├── llm_client.py        # LLM 客户端适配层
 ├── pdf_utils.py         # PDF 渲染与书签写入
 ├── onenote_client.py    # OneNote 桌面版 COM 接口薄封装（Pipeline 2.5 / 4）
-├── registry.py          # 状态管理（读写 Excel / state.json 兜底）
+├── registry.py          # 状态管理（读写 books_config.xlsx；缺失时自动建表）
 │
 ├── pyproject.toml       # 项目依赖
 ├── .env.example         # API Key 配置模板

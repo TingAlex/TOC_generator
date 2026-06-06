@@ -1,9 +1,9 @@
 """
-状态管理：以 books-work/books_config.xlsx 为主要存储。
-若 Excel 不存在，自动回退到各书目录下的 state.json（兜底/迁移前兼容）。
+状态管理：以 books-work/books_config.xlsx 为唯一存储。
+Excel 不存在时（如新机器首次运行，books-work/ 不入库），save() 会先自动
+建好空表骨架（经 init_work.ensure_books_config）再写入，无需手动初始化。
 """
 
-import json
 from pathlib import Path
 
 WORK_DIR    = Path("books-work")
@@ -49,19 +49,18 @@ def _toc_pages_to_str(val) -> str:
 
 def load() -> dict:
     """聚合所有书本状态为 {book_name.pdf: state_dict}。
-    优先读 books_config.xlsx，不存在时回退到各 state.json。"""
+    读 books_config.xlsx；Excel 不存在时返回空（尚无任何书本状态）。"""
     if BOOKS_CONFIG.exists():
         return _load_from_excel()
-    return _load_from_state_json()
+    return {}
 
 
 def save(registry: dict) -> None:
-    """将书本状态持久化。
-    优先写 books_config.xlsx，不存在时回退到各 state.json。"""
-    if BOOKS_CONFIG.exists():
-        _save_to_excel(registry)
-    else:
-        _save_to_state_json(registry)
+    """将书本状态写入 books_config.xlsx；Excel 不存在则先建空表骨架。"""
+    if not BOOKS_CONFIG.exists():
+        import init_work
+        init_work.ensure_books_config()
+    _save_to_excel(registry)
 
 
 # ── Excel 实现 ─────────────────────────────────────────────────────────────
@@ -136,31 +135,3 @@ def _save_to_excel(registry: dict) -> None:
             ws.cell(row=target_row, column=headers[col_name], value=val)
 
     wb.save(BOOKS_CONFIG)
-
-
-# ── state.json 兜底实现（无 Excel 时使用）────────────────────────────────
-
-def _state_path(book_name: str) -> Path:
-    return WORK_DIR / _stem(book_name) / "state.json"
-
-
-def _load_from_state_json() -> dict:
-    registry: dict[str, dict] = {}
-    for state_file in sorted(WORK_DIR.glob("*/state.json")):
-        try:
-            state = json.loads(state_file.read_text(encoding="utf-8"))
-            book_name = state_file.parent.name + ".pdf"
-            registry[book_name] = state
-        except (json.JSONDecodeError, OSError):
-            pass
-    return registry
-
-
-def _save_to_state_json(registry: dict) -> None:
-    for book_name, state in registry.items():
-        path = _state_path(book_name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(
-            json.dumps(state, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )

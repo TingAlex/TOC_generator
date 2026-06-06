@@ -45,7 +45,7 @@
 | `main.py` | Pipeline 1 批量入口；交互式询问目录页和偏移量；逐步推进每本书 |
 | `test_one.py` | Pipeline 1 单本测试；硬编码书名，方便调试 |
 | `claude_toc_helper.py` | Pipeline 1（Claude 版）辅助：`render`（渲染目录页）/`bookmarks`（写书签）两个**不调用 AI API** 的子命令；配合 skill `/toc-by-claude`，由 Claude 自身多模态能力替代 DeepSeek-OCR/V3 |
-| `init_work.py` | 扫描 books-todo/，将 state.json 数据迁移并写入 Excel；新书入库时重跑 |
+| `init_work.py` | 扫描 books-todo/（与 books-done/）登记新书到 Excel，并生成 split_config.xlsx；新书入库时重跑。亦暴露 `ensure_books_config()` 供 registry 冷启动建表 |
 | `split_pdf.py` | Pipeline 2 单本命令行入口；同时也暴露 `run_split()` 供 split_all 调用 |
 | `split_all.py` | Pipeline 2 批量入口；读 Excel 配置，顺序处理所有未完成书本 |
 | `onenote_create_sections.py` | Pipeline 2.5 入口；按 `0N` 文件夹数在指定笔记本建「书名分区组」+ 空分区 `01…0N`；分区组查重防重名；可 `--new-notebook` 新建在线笔记本；默认 dry-run，`--write` 才落盘 |
@@ -56,7 +56,7 @@
 
 | 模块 | 职责 |
 |------|------|
-| `registry.py` | 统一状态读写。优先操作 `books_config.xlsx`；Excel 不存在时回退到各书的 `state.json`（兼容旧版） |
+| `registry.py` | 统一状态读写。以 `books_config.xlsx` 为唯一存储；Excel 不存在时 `save()` 自动经 `init_work.ensure_books_config()` 建空表骨架再写入 |
 | `ai_parser.py` | 调用 OCR 模型识别图片文字；调用 LLM 将 OCR 文本解析为结构化目录 |
 | `llm_client.py` | LLM 适配层；统一封装硅基流动 / DeepSeek / Anthropic / OpenAI 四种 provider |
 | `pdf_utils.py` | PDF 工具函数：渲染页面为图片、写入书签 |
@@ -149,9 +149,12 @@ books-done/{书名}_拆分/{01,02,...}/{序号-标题[_N]}.pdf
 
 > `max_pages_per_file` 的典型用途：与 OneNote Batch 插件配合时，将单个 PDF 页数控制在导入工具的上限以内（如 20 页）。
 
-### 兜底：`books-work/{书名}/state.json`
+### 冷启动：Excel 缺失时自动建表
 
-仅在 `books_config.xlsx` 不存在时使用（`registry.py` 自动检测）。`init_work.py` 运行后，state.json 数据已迁移至 Excel，不再被写入。
+`books-work/` 不入库（`.gitignore`），故新机器克隆后 `books_config.xlsx` 不存在。
+此时 `registry.save()` 会先调用 `init_work.ensure_books_config()` 建好仅含表头的空表骨架，
+再把书本状态写入——无需先手动跑 `init_work.py`，Pipeline 1 / `claude_toc_helper.py` 可直接运行。
+（旧版的 `state.json` 兜底已移除：Excel 是唯一状态源。）
 
 ---
 
