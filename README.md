@@ -150,7 +150,7 @@ uv run toc-split "书名" --level 3 --max-pages 100
 | 参数（`toc-split`） | 默认 | 说明 |
 |------|------|------|
 | `--level` | 3 | 拆分最大层级（1=章, 2=节, 3=小节） |
-| `--max-pages` | 100 | 每个文件夹总页数上限 |
+| `--max-pages` | 100 | 每个文件夹（= OneNote 分区）总页数**硬上限** |
 | `--max-pages-per-file` | 不限 | 单文件最大页数，超出则切为 `_1/_2/…` 多份 |
 | `--prefix-digits` | 3 | 前缀位数（3 → `001-`） |
 | `--prefix-sep` | `-` | 前缀分隔符 |
@@ -158,6 +158,8 @@ uv run toc-split "书名" --level 3 --max-pages 100
 | `--offset` | 自动 | 手动覆盖页码偏移量 |
 
 与 OneNote Batch 配合时，在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`）控制单 PDF 页数。
+文件夹按 `max_pages` **硬上限**以「文件」为单位贪心装满（只要 `max_pages_per_file ≤ max_pages` 就绝不超限），
+一章若被切成多份可能落到不同文件夹——优先保证分区大小、便于安全同步。
 
 ### Pipeline 2.5：OneNote 预建分区组 + 空分区（导入前准备）
 

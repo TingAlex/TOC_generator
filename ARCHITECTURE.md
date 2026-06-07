@@ -132,23 +132,39 @@ toc_parsed bookmarks_added bookmark_count 拆分完成`。
 
 ## 拆分算法
 
-### 批次文件夹分配
+分两步：先把章节展开成「输出文件」，再以**文件**为单位贪心装箱到文件夹（`split.py`）。
+
+### 1. 章节 → 输出文件（每个文件 ≤ max_pages_per_file）
+
+每个条目（level ≤ 拆分层级）算出 PDF 页面范围（`_section_ranges`）；父条目与其首个子条目同页时
+只占那一页（「紧邻下一条同页 → 本条仅占一页」，避免章/节标题页与子条目内容重复整段）。再把每个
+范围按 `max_pages_per_file` 切片（`_plan_files`）：
+
+```python
+if not max_pages_per_file or count <= max_pages_per_file:
+    一个文件
+else:
+    n = ceil(count / max_pages_per_file)   # 001-章_1.pdf, 001-章_2.pdf …
+```
+前言页（`000-书名`，offset>0 时）也作为一个文件参与。
+
+### 2. 输出文件 → 文件夹（硬上限 max_pages，纯贪心装满）
 
 ```python
 folder_idx, cumulative = 1, 0
-for section in sections:
-    if cumulative + section.pages > max_pages and cumulative > 0:
+for f in files:                       # 每个 f.pages ≤ max_pages_per_file
+    if cumulative + f.pages > max_pages and cumulative > 0:
         folder_idx += 1; cumulative = 0
-    place(section, folder_idx); cumulative += section.pages
+    place(f, folder_idx); cumulative += f.pages
 ```
-当前文件夹已有内容**且**加入下一个会超限时，才新建文件夹；单个超限文件独占一个文件夹。
 
-### 文件级切片（`max_pages_per_file` 有值且某条目超限时）
+只要 `max_pages_per_file ≤ max_pages`（典型 20 ≤ 100），**每个文件夹必然 ≤ max_pages**——
+装箱单位本身 ≤ 上限，「放不下就另起」永远成立。设计取向：**文件夹 = OneNote 分区 = 同步单元，
+其大小是硬约束、优先保证**；代价是一章的多个 `_N` 文件可能落到不同文件夹（对“按大小同步、求稳”
+的场景可接受且更安全）。
 
-```python
-n_parts = ceil(page_count / max_pages_per_file)
-# 切为 001-章_1.pdf, 001-章_2.pdf …，均落入同一文件夹
-```
+> `cumulative > 0` 守卫避免留下空文件夹。万一未设 `max_pages_per_file`、又有单文件 > `max_pages`
+> （无法再切），它只能独占该文件夹并超限——会打印警告提示调小 `--max-pages-per-file`。
 
 ---
 
