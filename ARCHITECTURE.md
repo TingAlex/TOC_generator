@@ -108,7 +108,7 @@ toc_parsed bookmarks_added bookmark_count 拆分完成`。
 
 `books-work/` 不入库（`.gitignore`），新机器克隆后 Excel 不存在。此时 `registry.save()`
 会先调用 `bookconfig.ensure_books_config()` 建好仅含表头的空表骨架再写入——无需先手动跑
-`toc-init`，Pipeline 1 / `toc-claude` 可直接运行。（旧版 `state.json` 兜底已移除：Excel 是唯一状态源。）
+`toc-init`，Pipeline 1 / `toc-claude` 可直接运行。**`books_config.xlsx` 是唯一状态源。**
 
 ### 全局格式：`books-work/split_config.xlsx`
 
@@ -206,7 +206,7 @@ n_parts = ceil(page_count / max_pages_per_file)
 
 | 坑 / 要点 | 处理 |
 |-----------|------|
-| comtypes 默认晚绑定，OneNote 报 `TYPE_E_LIBNOTREGISTERED`（“库没有注册”） | 用 `GetModule(("{0EA692EE-…}",1,1))`（OneNote 15.0 类型库）强制**早绑定** |
+| comtypes 默认晚绑定，OneNote 报 `TYPE_E_LIBNOTREGISTERED`（“库没有注册”） | 用 `GetModule(("{0EA692EE-BB50-4E3C-AEF0-356D91732725}",1,1))`（OneNote 15.0 类型库）强制**早绑定**，再 `CreateObject("OneNote.Application", interface=mod.IApplication)` |
 | `DeleteHierarchy` / `UpdatePageContent` / `DeletePageContent` 的 DATE 参数 | 显式传 `0.0`（= 不校验修改时间），否则 comtypes 默认 datetime 与签名冲突 |
 | 删除安全性 | `deletePermanently=False` → 进 OneNote 回收站，可恢复 |
 | 改标题不伤正文 | `UpdatePageContent` 只提交含 `ID` 与 `Title` 的最小 Page XML |
