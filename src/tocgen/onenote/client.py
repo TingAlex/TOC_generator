@@ -43,6 +43,12 @@ CFT_NOTEBOOK = 1
 CFT_FOLDER = 2   # 分区组（section group，磁盘上是文件夹）
 CFT_SECTION = 3  # 分区（.one 文件）
 
+# SetFilingLocation 枚举：把「print to OneNote 打印机」的打印输出定向到指定分区。
+# FilingLocation.flPrintOuts=5（打印机输出），FilingLocationType.fltNamedSectionNewPage=0
+# （在指定分区里新建一页归档）。设好后该分区即成为打印输出落点，无需弹位置选择框。
+FL_PRINTOUTS = 5
+FLT_NAMED_SECTION_NEW_PAGE = 0
+
 # OneNote 为空白页显示的占位标题（不区分大小写）
 _PLACEHOLDER_TITLES = {"", "无标题页", "无标题", "untitled page", "untitled"}
 
@@ -160,6 +166,20 @@ class OneNoteClient:
             if nb.name == name:
                 return nb
         return None
+
+    def list_section_pages(self, section_id: str) -> list[Page]:
+        """只取某个分区的页（按显示顺序）。比全量 get_hierarchy 轻，供打印落地轮询用。"""
+        xml = self._app.GetHierarchy(section_id, HS_PAGES, XS_2013)
+        sec_el = ET.fromstring(xml)
+        return self._parse_section(sec_el).pages
+
+    # ── 打印导入：把打印输出定向到指定分区 ──────────────────────────────
+    def set_printout_section(self, section_id: str) -> None:
+        """把「print to OneNote 打印机」的打印输出落点设为该分区（之后每次打印新建一页）。
+
+        持久改 OneNote 的打印输出归档设置；无读回接口，跑完不还原（仅影响用户下次手动打印的默认落点）。
+        """
+        self._app.SetFilingLocation(FL_PRINTOUTS, FLT_NAMED_SECTION_NEW_PAGE, section_id)
 
     # ── 创建层级（分区组 / 分区 / 在线笔记本） ───────────────────────────
     def create_section_group(self, notebook_id: str, name: str) -> str:

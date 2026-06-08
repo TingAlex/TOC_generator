@@ -1,7 +1,7 @@
 [project]
 name = "pdf-toc"
-version = "0.8.0"
-description = "PDF 目录识别 + 书签 + 按章节拆分 + OneNote 本地整理"
+version = "0.9.0"
+description = "PDF 目录识别 + 书签 + 按章节拆分 + 打印导入 OneNote + 本地整理"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
@@ -24,6 +24,8 @@ toc-init              = "tocgen.cli.init:main"             # 初始化 Excel 配
 toc-split             = "tocgen.cli.split:main"            # Pipeline 2 单本
 toc-split-all         = "tocgen.cli.split_all:main"        # Pipeline 2 批量
 toc-onenote-sections  = "tocgen.cli.onenote_sections:main" # Pipeline 2.5 建分区组+空分区
+toc-onenote-import    = "tocgen.cli.onenote_import:main"   # Pipeline 3 打印 PDF 进分区（需 SumatraPDF）
+toc-onenote-fix       = "tocgen.cli.onenote_fix:main"      # 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据）
 toc-onenote-titles    = "tocgen.cli.onenote_titles:main"  # Pipeline 4 核对标题/删占位/去重
 toc-onenote-strip     = "tocgen.cli.onenote_strip:main"   # Pipeline 4 删误插入附件
 

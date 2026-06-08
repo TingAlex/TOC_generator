@@ -17,7 +17,10 @@
 ┌───────────────────────────▼──────────────────────────────────┐
 │  Pipeline 2.5：OneNote 预建分区组 + 空分区（toc-onenote-sections） │
 └───────────────────────────┬──────────────────────────────────┘
-                            │  OneNote Batch 导入（外部，Pipeline 3）
+┌───────────────────────────▼──────────────────────────────────┐
+│  Pipeline 3：打印 PDF 进分区（toc-onenote-import，需 SumatraPDF）  │
+│    COM SetFilingLocation 定向分区 → SumatraPDF 静默打印 → 轮询落地 │
+└───────────────────────────┬──────────────────────────────────┘
 ┌───────────────────────────▼──────────────────────────────────┐
 │  Pipeline 4：OneNote 本地整理（toc-onenote-titles / -strip）       │
 │    本地 COM 读分区/页 → 删占位页 · 去重 · 按文件名核对改标题         │
@@ -56,9 +59,11 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 | `bookconfig.py` | 两张 Excel 的模板、创建、读取（`books_config` + `split_config`）；`run_init` 为 `toc-init` 入口 |
 | `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset） |
 | `pipeline1.py` | `process_one`：Pipeline 1 交互编排（渲染→OCR→解析→写书签），被批量/单本两个入口复用 |
-| `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、改/删页、列/删附件 |
-| `onenote/common.py` | 三个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`expected_titles`、`resolve_scope`、文件夹助手 |
-| `cli/*.py` | 9 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
+| `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、改/删页、列/删附件、`set_printout_section`（打印定向）、`list_section_pages`（轮询） |
+| `onenote/common.py` | 四个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
+| `onenote/printer.py` | 打印后端：定位 SumatraPDF + `print_pdf`（静默打印到 OneNote 桌面打印机） |
+| `onenote/fix.py` | 修复 OneNote「正在清理…」卡死：`fix_relaunch`（杀进程+重启+等就绪，**不删任何文件**） |
+| `cli/*.py` | 11 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
 
 ---
 
@@ -189,9 +194,57 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
 
 ---
 
+## Pipeline 3：打印 PDF 进分区（toc-onenote-import）
+
+复刻 OneNote Batch 的「print to OneNote」路径，把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的
+对应分区。分区 ⇄ 文件夹映射、`--section-group` 范围限定与 Pipeline 4 共用
+（`section_number` / `resolve_scope` / `sorted_pdfs`）。
+
+### 机制
+
+```
+for 每个分区(按编号排序):
+    client.set_printout_section(分区.id)          # SetFilingLocation(flPrintOuts=5, fltNamedSectionNewPage=0)
+    for 每个 PDF in sorted_pdfs(文件夹):
+        before = len(list_section_pages(分区.id))
+        printer.print_pdf(pdf, "OneNote (Desktop)", sumatra)   # SumatraPDF -print-to … -silent
+        轮询 list_section_pages 直到 > before（或 --timeout 超时则中止本分区）
+```
+
+- **定向**：`SetFilingLocation(flPrintOuts=5, fltNamedSectionNewPage=0, 分区ID)` 让打印输出落到指定分区、
+  每次新建一页，无需弹位置框。一个多页 PDF = OneNote 里**一页**打印输出（与 Pipeline 4「一页 ⇄ 一文件」一致）。
+- **串行 + 落地确认**：必须打一份、轮询页数 +1、再打下一份，保证「打印顺序 = 页显示顺序」；超时/打印失败
+  即**中止本分区**（不续打，避免迟到页与下一页错序）。事后 `toc-onenote-titles` 才能按显示顺序对齐改标题。
+- **打印后端 = SumatraPDF**（`-print-to "OneNote (Desktop)" -silent`）：免费便携、静默、打完自退、不抢焦点。
+  比 Adobe `/t` 稳。`onenote/printer.find_sumatra` 按 `--sumatra` → PATH → 常见安装位置定位。
+
+### COM / 打印接入要点
+
+| 坑 / 要点 | 处理 |
+|-----------|------|
+| 打印输出定向 | `SetFilingLocation(5, 0, sectionID)`：三参全 `[in]`、无 DATE 坑；持久改 OneNote 打印归档设置，无读回接口、跑完不还原（仅影响用户下次手动打印默认落点） |
+| 打印机选错版本 | **必须 `OneNote (Desktop)`**（端口 `nul:`，2016 桌面栈）；避开 UWP 版 `Send to Microsoft OneNote`（端口含包名 `…8wekyb3d8bbwe…`），否则与桌面 COM 不在同一栈 |
+| 打印是异步的 | SumatraPDF 退出≠页已生成；靠 `list_section_pages`（= `GetHierarchy(sectionID, hsPages)`）轮询页数 +1 确认落地 |
+| 「总是询问打印输出位置」选项 | `fltNamedSectionNewPage` 理应覆盖；首跑若仍弹框，需在 OneNote 选项里关掉该询问 |
+| 不嵌源文件 | 走打印路径不会插入 PDF 源文件附件，故**无需** `toc-onenote-strip`（那是 OneNote Batch 的遗留问题） |
+
+### 卡死自愈：`toc-onenote-fix`（`onenote/fix.py`）
+
+打印副本没处理完时，OneNote 下次启动会卡在「很抱歉，OneNote 正在清理上次打开之后的内容」。
+`fix_relaunch()` 复刻 OneFix 的「Fix Relaunch」：强杀 `ONENOTE.EXE`/`ONENOTEM.EXE` → 重启 → 轮询
+`OneNoteClient().get_hierarchy()` 直到 COM 恢复（= 已越过清理）。`toc-onenote-import --fix` 会在打印前先跑它。
+
+| 坑 / 要点 | 处理 |
+|-----------|------|
+| **绝不删缓存** | 用户全是在线笔记本 + 关同步 + 离线编辑，未同步改动只在本地 `16.0\cache`；网上「删 16.0」通用解法会丢笔记。本工具只杀进程+重启，不碰文件 |
+| 重启后旧 COM 失效 | `fix_relaunch` 杀的就是当前 COM 连的进程，故重启后必须用**新** `OneNoteClient`；`wait_until_ready` 内部每轮新建 client 探活。`--import --fix` 在 fix 之后才建主 client |
+| Office16 = 2016/365 | 365 也登记为 Office16，进程名/路径一致（`…\root\Office16\ONENOTE.EXE`） |
+
+---
+
 ## Pipeline 4：OneNote 本地整理
 
-把拆分文件夹用 OneNote Batch 导入后做收尾。**纯本地离线**：COM 操作本地缓存，不读 Excel、不走网络。
+把拆分文件夹用 Pipeline 3（或 OneNote Batch）导入后做收尾。**纯本地离线**：COM 操作本地缓存，不读 Excel、不走网络。
 
 ### 对齐规则
 
@@ -232,11 +285,19 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
 - **为什么走桌面 COM 而非 Graph**：用户刻意关闭 OneNote 同步做离线编辑；桌面 COM 操作本地缓存，
   离线免鉴权，改动随之后同步上传。Graph 则必须联网 + OAuth。
 - **平台限制**：仅 Windows + OneNote 桌面版（Office16），**不支持** UWP「OneNote for Windows 10」。
+  OneNote **365 也登记为 Office16**（exe 同为 `…\root\Office16\ONENOTE.EXE`，打印机/COM/缓存路径与 2016 一致）。
 - **依赖 `comtypes`（非 pywin32）**：纯 Python、免编译，Python 3.14 下更省事；COM 调用必须早绑定。
 - **装依赖**：venv 由 `uv` 管理、**无 pip**，用 `uv add` / `uv sync`（或临时 `uv pip install`），别 `python -m pip`。
 - **运行前 `$env:PYTHONUTF8=1`**：否则中文标题/分区名/路径乱码。
-- **OneNote 默认标题**：新建分区占位页 `无标题页`（非空）；改名失败页 `打印输出`。
+- **OneNote 默认标题**：新建分区占位页 `无标题页`（非空）；改名失败页/打印输出页 `打印输出`。
 - **Batch 分区名带空格**：是 `新分区 N`（如 `新分区 7`），不是 `新分区7`。
+- **Pipeline 3 需装 [SumatraPDF](https://www.sumatrapdfreader.org/download-free-pdf-viewer)**：打印后端，
+  `onenote/printer.find_sumatra` 按 `--sumatra` → PATH → 常见安装位置（含 `%LOCALAPPDATA%\SumatraPDF\`）定位。
+- **打印机名随机器/语言变**：默认 `OneNote (Desktop)`；换机器先 `Get-Printer` 找到 **OneNote 桌面版**打印机
+  （DriverName「Send to Microsoft OneNote 16 Driver」且端口 `nul:`），用 `--printer` 传入。**别选** UWP 那个
+  （端口含包名 `…8wekyb3d8bbwe…`）。首跑若弹「选择打印输出位置」框，去 OneNote 选项关掉「总是询问…」。
+- **卡死自愈**：打印没处理完会导致下次启动卡「正在清理上次内容」。用 `toc-onenote-fix` 或 `toc-onenote-import --fix`
+  （杀进程+重启，**绝不删缓存**——离线编辑的未同步改动只在 `16.0\cache` 里，删了丢笔记）。
 
 ---
 
@@ -249,6 +310,7 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
 | `anthropic` | Anthropic Claude |
 | `openpyxl` | 读写 Excel 配置 |
 | `python-dotenv` | 从 `.env` 加载 API Key |
-| `comtypes` | Pipeline 2.5 / 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
+| `comtypes` | Pipeline 2.5 / 3 / 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
+| **SumatraPDF**（外部 exe，非 Python 包） | Pipeline 3 打印后端：`-print-to "OneNote (Desktop)" -silent` 静默打印。经 `subprocess` 调用，不入 `dependencies` |
 
 构建：`hatchling`（`[build-system]`），打包 `src/tocgen`，console_scripts 见 `pyproject.toml [project.scripts]`。

@@ -34,7 +34,8 @@ books-todo/*.pdf
       ▼  uv run toc-onenote-sections    【Pipeline 2.5：导入前准备】
          按 0N 文件夹数，在指定笔记本建「书名分区组」+ 空分区 01…0N
       │
-      ▼  OneNote Batch 插件             【Pipeline 3：导入（外部）】
+      ▼  uv run toc-onenote-import      【Pipeline 3：打印导入（需 SumatraPDF）】
+         SetFilingLocation 定向分区 → SumatraPDF 静默打印 → 轮询落地
       │
       ▼  uv run toc-onenote-titles      【Pipeline 4：OneNote 本地整理】
          核对/改标题 · 删占位页 · 去重（toc-onenote-strip：删误插入附件）
@@ -49,7 +50,8 @@ books-todo/*.pdf
 - **Python 3.14+**（建议通过 `uv` 自动管理）
 - **uv**（Python 包管理器）
 - **API Key**（仅 Pipeline 1 的 API 版需要，任选其一）：硅基流动（推荐）、DeepSeek、Anthropic、OpenAI
-- **（仅 Pipeline 2.5 / 4 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）
+- **（仅 Pipeline 2.5 / 3 / 4 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）
+- **（仅 Pipeline 3 需要）** [SumatraPDF](https://www.sumatrapdfreader.org/download-free-pdf-viewer)（静默打印 PDF 到 OneNote 打印机）
 
 ---
 
@@ -84,6 +86,8 @@ notepad .env   # 填入 SILICONFLOW_API_KEY=sk-你的密钥
 | `toc-split` | Pipeline 2 单本拆分 |
 | `toc-split-all` | Pipeline 2 批量拆分（读 Excel） |
 | `toc-onenote-sections` | Pipeline 2.5 预建分区组 + 空分区 |
+| `toc-onenote-import` | Pipeline 3 打印 PDF 进分区（需 SumatraPDF） |
+| `toc-onenote-fix` | 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据） |
 | `toc-onenote-titles` | Pipeline 4 核对标题 + 删占位页 + 去重 |
 | `toc-onenote-strip` | Pipeline 4 子工具：删除误插入的源文件附件 |
 
@@ -184,6 +188,52 @@ uv run toc-onenote-sections --book "书名" --notebook "新本子" --new-noteboo
 
 > **安全**：默认 dry-run；创建为纯增量（只新增空分区组/空分区）；同名分区组**中止并报警**。
 
+### Pipeline 3：打印 PDF 进分区（toc-onenote-import）
+
+复刻 OneNote Batch 的「print to OneNote」路径，把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的对应分区：
+COM `SetFilingLocation` 把打印输出**定向到目标分区**，再用 **SumatraPDF** 把 PDF 静默打到 `OneNote (Desktop)`
+打印机；**串行**打印——打一份、轮询分区页数 +1 确认落地、再打下一份，保证「打印顺序 = 页显示顺序」。
+
+```powershell
+$env:PYTHONUTF8=1
+# 先装 SumatraPDF（https://www.sumatrapdfreader.org/download-free-pdf-viewer）
+uv run toc-onenote-import --section-group "书名" --section-prefix= --root books-done/书名_拆分            # dry-run 看映射
+uv run toc-onenote-import --section-group "书名" --section-prefix= --root books-done/书名_拆分 --write     # 正式打印
+uv run toc-onenote-import --list --section-group "书名"                                                   # 只读看分区/页
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--root` | 拆分文件夹根目录（如 `books-done/书名_拆分`） |
+| `--section-prefix` | 分区名前缀（默认 `新分区`；配合 Pipeline 2.5 的 `01…0N` 用 `--section-prefix=`） |
+| `--section-group` | 只处理该分区组内的分区（避免多本书同名 0N 混淆） |
+| `--printer` | OneNote 桌面版打印机名（默认 `OneNote (Desktop)`；**勿用** UWP 版 `Send to Microsoft OneNote`） |
+| `--sumatra` | SumatraPDF.exe 路径（缺省自动查 PATH 与常见安装位置） |
+| `--settle` | 每份落地后停顿秒数（默认 0.5） |
+| `--timeout` | 单文件等待落地超时秒数（默认 90，超时则中止本分区防错位） |
+| `--fix` | 打印前先修复 OneNote「正在清理…」卡死（= 跑 `toc-onenote-fix`，见下） |
+| `--write` | 真正打印（默认 dry-run） |
+
+> **前提**：先用 `toc-onenote-sections` 建好 `01…0N` 空分区，且目标笔记本已在 OneNote 桌面版里打开。
+> **打印路径不嵌源文件附件**，故无需 `toc-onenote-strip`。打印后用 `toc-onenote-titles --delete-placeholders --write` 改标题、删占位页。
+> 首跑若 OneNote 仍弹「选择打印输出位置」框，去 OneNote 选项关掉「总是询问打印输出的发送位置」。
+
+#### 修复 OneNote「正在清理上次打开之后的内容」卡死（toc-onenote-fix）
+
+打印副本没处理完时，OneNote 下次启动会卡在「很抱歉，OneNote 正在清理上次打开之后的内容」。
+本工具复刻 OneFix 的「Fix Relaunch」：**强杀 `ONENOTE.EXE`/`ONENOTEM.EXE` → 重启 → 等 COM 恢复响应**，
+免重启电脑。**绝不删除任何缓存/数据**——本项目用户全是在线笔记本 + 关同步 + 离线编辑，未同步改动
+只在本地缓存里，网上「删 `16.0` 缓存」的通用解法会丢笔记，故本工具不碰文件。
+
+```powershell
+$env:PYTHONUTF8=1
+uv run toc-onenote-fix                       # 卡住时手动救
+uv run toc-onenote-import ... --fix --write   # 打印前自动先修一遍
+```
+
+> 重启后旧的 COM 连接失效，本工具内部会自动等到**新实例**就绪；脚本里如需复用，请在 fix 之后重新建 `OneNoteClient`。
+
 ### Pipeline 4：OneNote 本地整理（核对标题 + 删占位页 + 去重）
 
 用 OneNote Batch 把拆分 PDF 导入后，本工具调用 **OneNote 桌面版本地 COM 接口**核对修正，
@@ -264,12 +314,14 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 │   ├── split.py             # 按目录拆分编排（run_split）
 │   ├── pipeline1.py         # Pipeline 1 编排（process_one）
 │   ├── onenote/
-│   │   ├── client.py        # OneNote 桌面 COM 薄封装
-│   │   └── common.py        # 三个 OneNote CLI 共享：默认笔记本/编号解析/范围限定
+│   │   ├── client.py        # OneNote 桌面 COM 薄封装（含打印定向/分区页轮询）
+│   │   ├── common.py        # OneNote CLI 共享：默认笔记本/编号解析/排序/范围限定
+│   │   ├── printer.py       # 打印后端：SumatraPDF 静默打印到 OneNote 打印机
+│   │   └── fix.py           # 修复「正在清理…」卡死：杀进程+重启+等就绪（不删数据）
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令
 │       ├── bookmarks.py  bookmarks_one.py  claude_toc.py  init.py
 │       ├── split.py  split_all.py
-│       └── onenote_sections.py  onenote_titles.py  onenote_strip.py
+│       └── onenote_sections.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
 │
 ├── books-todo/   # 放入待处理 PDF（不入库）
 ├── books-done/   # 成品 PDF + {书名}_拆分/ 拆分输出（不入库）

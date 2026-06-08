@@ -28,12 +28,20 @@ def section_number(name: str, prefix: str) -> int | None:
     return int(rest) if rest.isdigit() else None
 
 
-def expected_titles(folder: Path) -> list[str]:
-    """文件夹内 PDF 的期望页标题 = 去扩展名的文件名，按编号前缀数字排序。"""
+def sorted_pdfs(folder: Path) -> list[Path]:
+    """文件夹内 PDF，按编号前缀数字排序（无前缀的排末尾、再按名）。
+
+    导入打印与改标题共用同一排序，保证「打印顺序 = 页显示顺序 = 期望标题顺序」。
+    """
     def sort_key(p: Path):
         m = _NUM_PREFIX.match(p.stem)
         return (int(m.group(1)) if m else 1 << 30, p.stem)
-    return [p.stem for p in sorted(folder.glob("*.pdf"), key=sort_key)]
+    return sorted(folder.glob("*.pdf"), key=sort_key)
+
+
+def expected_titles(folder: Path) -> list[str]:
+    """文件夹内 PDF 的期望页标题 = 去扩展名的文件名，按编号前缀数字排序。"""
+    return [p.stem for p in sorted_pdfs(folder)]
 
 
 def section_folder_names(split_folder: Path) -> list[str]:
