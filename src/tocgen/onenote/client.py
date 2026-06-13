@@ -198,6 +198,10 @@ class OneNoteClient:
         path = name if name.lower().endswith(".one") else f"{name}.one"
         return self._app.OpenHierarchy(path, parent_id, CFT_SECTION)
 
+    def create_local_notebook(self, local_path: str) -> str:
+        """新建本地（不同步）笔记本，返回其 ID。local_path 为磁盘绝对路径（文件夹名即笔记本名）。"""
+        return self._app.OpenHierarchy(local_path, "", CFT_NOTEBOOK)
+
     def create_online_notebook(self, name: str, sibling_of_path: str) -> str:
         """
         新建**在线**笔记本，做成现有在线笔记本的同级。

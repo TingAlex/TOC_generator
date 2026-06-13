@@ -182,6 +182,35 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
   唯一查重的是分区组名（=书名）→ 撞名即中止，绝不改动既有内容。
 - **新建在线笔记本**（`--new-notebook`）：取现有**在线**笔记本（`path` 以 `https://` 开头）的
   OneDrive 路径，求父目录拼新名，`OpenHierarchy(newUrl, "", cftNotebook)` → 落在同一云端位置。
+- **新建本地笔记本**（`--local-path`）：`OpenHierarchy(磁盘绝对路径, "", cftNotebook)` → 纯本地
+  `.one` 文件，不同步，**无 SharePoint 100MB 限制**。目标笔记本是在线笔记本时首选此方案。
+
+### SharePoint 100MB 限制与本地笔记本方案
+
+在线（OneDrive/SharePoint）笔记本有每个 `.one` 分区文件 **100MB** 的同步上限。打印进 OneNote
+的每页 PDF 以高分辨率图片存储，100 页打印输出的 `.one` 文件可达 150~300MB，超限后 SharePoint
+拒绝同步，OneNote 报错并中断打印流程。
+
+**解决方案：先打印到本地笔记本，全部完成后整体移入在线笔记本。**
+
+打印期间在本地操作，不触发 SharePoint 限制；打印完成后在 OneNote UI 中把**整个分区组**拖入
+在线笔记本，OneNote 自行分批同步，不再触发 100MB 单文件报错。
+
+```
+# 1. 建本地笔记本 + 分区组 + 空分区
+toc-onenote-sections --book "书名" --local-path "C:\Users\用户\Documents\书名_本地" --write
+
+# 2. 打印
+toc-onenote-import --notebook "书名_本地" --section-group "书名" --section-prefix= \
+    --root books-done/书名_拆分 --write
+
+# 3. 收尾改标题
+toc-onenote-titles --notebook "书名_本地" --section-group "书名" --section-prefix= \
+    --root books-done/书名_拆分 --delete-placeholders --write
+
+# 4. 在 OneNote UI 中：把分区组整体拖入目标在线笔记本（如「薛金星教材全解-人教B」）
+#    OneNote 自行处理同步，不再报 SharePoint 100MB 错误
+```
 
 ### COM 接入要点（创建相关）
 
@@ -227,6 +256,16 @@ for 每个分区(按编号排序):
 | 打印是异步的 | SumatraPDF 退出≠页已生成；靠 `list_section_pages`（= `GetHierarchy(sectionID, hsPages)`）轮询页数 +1 确认落地 |
 | 「总是询问打印输出位置」选项 | `fltNamedSectionNewPage` 理应覆盖；首跑若仍弹框，需在 OneNote 选项里关掉该询问 |
 | 不嵌源文件 | 走打印路径不会插入 PDF 源文件附件，故**无需** `toc-onenote-strip`（那是 OneNote Batch 的遗留问题） |
+
+### 重打印前清空：`toc-onenote-clear`（`cli/onenote_clear.py`）
+
+重新打印前需先清空目标分区的旧页（否则变成两套内容叠加）。`toc-onenote-clear` 把指定分区组内
+所有分区的全部页面送入 OneNote 回收站（`DeleteHierarchy(pageId, 0.0, False)`），可恢复，默认 dry-run。
+
+```
+toc-onenote-clear --notebook "书名_本地" --section-group "书名"         # 预览
+toc-onenote-clear --notebook "书名_本地" --section-group "书名" --write  # 真正删除
+```
 
 ### 卡死自愈：`toc-onenote-fix`（`onenote/fix.py`）
 
