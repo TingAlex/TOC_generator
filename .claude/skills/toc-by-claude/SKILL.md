@@ -74,8 +74,10 @@ uv run toc-claude bookmarks "书名" --offset 18
 告诉用户已完成，并提示后续流程（不属于本 skill）：
 1. `uv run toc-init`（首次入库或新书时刷新 Excel 配置）
 2. `uv run toc-split-all --book "书名"`（按目录拆分）
-3. `uv run toc-onenote-sections --book "书名" --write`（建分区组+空分区）
-4. 用户手动 OneNote Batch 导入 → 之后 `uv run toc-onenote-titles` 收尾。
+3. `uv run toc-onenote-sections --book "书名" --local-path "C:\Users\用户\Documents\书名_本地" --write`（建本地笔记本 + 分区组）
+4. `uv run toc-onenote-import --notebook "书名_本地" --section-group "书名" --section-prefix= --root books-done/书名_拆分 --write`（打印 PDF 进分区）
+5. `uv run toc-onenote-titles --notebook "书名_本地" --section-group "书名" --section-prefix= --root books-done/书名_拆分 --delete-placeholders --write`（改标题）
+6. 在 OneNote UI 中把整个分区组拖入目标在线笔记本完成归档。
 
 ---
 

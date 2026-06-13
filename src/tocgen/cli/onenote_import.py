@@ -1,4 +1,4 @@
-"""toc-onenote-import —— Pipeline 3：把拆分 PDF 打印进 OneNote 对应分区（复刻 OneNote Batch）。
+"""toc-onenote-import —— Pipeline 3：把拆分 PDF 打印进 OneNote 对应分区。
 
 对每个分区，先用 COM SetFilingLocation 把「print to OneNote」打印输出定向到该分区，再用
 SumatraPDF 把文件夹内每个 PDF 静默打到「OneNote (Desktop)」打印机；**串行**打印——打一份、

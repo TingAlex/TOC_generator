@@ -1,6 +1,6 @@
 [project]
 name = "pdf-toc"
-version = "0.9.0"
+version = "1.0.0"
 description = "PDF 目录识别 + 书签 + 按章节拆分 + 打印导入 OneNote + 本地整理"
 readme = "README.md"
 requires-python = ">=3.14"

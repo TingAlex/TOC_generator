@@ -175,7 +175,7 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
 
 ## Pipeline 2.5：OneNote 预建分区组 + 空分区
 
-拆分完成、Batch 导入前的准备步。**纯本地离线**（COM），按 `books-done/{书名}_拆分/` 下的
+Pipeline 3 打印前的准备步。**纯本地离线**（COM），按 `books-done/{书名}_拆分/` 下的
 `0N` 文件夹数，在指定笔记本建「书名分区组」+ 同名空分区 `01…0N`。
 
 - **作用域隔离**：分区放进「书名分区组」，`01…0N` 名被该组隔离，不与其它书的同名分区冲突；
@@ -225,8 +225,7 @@ toc-onenote-titles --notebook "书名_本地" --section-group "书名" --section
 
 ## Pipeline 3：打印 PDF 进分区（toc-onenote-import）
 
-复刻 OneNote Batch 的「print to OneNote」路径，把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的
-对应分区。分区 ⇄ 文件夹映射、`--section-group` 范围限定与 Pipeline 4 共用
+把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的对应分区。分区 ⇄ 文件夹映射、`--section-group` 范围限定与 Pipeline 4 共用
 （`section_number` / `resolve_scope` / `sorted_pdfs`）。
 
 ### 机制
@@ -255,7 +254,7 @@ for 每个分区(按编号排序):
 | 打印机选错版本 | **必须 `OneNote (Desktop)`**（端口 `nul:`，2016 桌面栈）；避开 UWP 版 `Send to Microsoft OneNote`（端口含包名 `…8wekyb3d8bbwe…`），否则与桌面 COM 不在同一栈 |
 | 打印是异步的 | SumatraPDF 退出≠页已生成；靠 `list_section_pages`（= `GetHierarchy(sectionID, hsPages)`）轮询页数 +1 确认落地 |
 | 「总是询问打印输出位置」选项 | `fltNamedSectionNewPage` 理应覆盖；首跑若仍弹框，需在 OneNote 选项里关掉该询问 |
-| 不嵌源文件 | 走打印路径不会插入 PDF 源文件附件，故**无需** `toc-onenote-strip`（那是 OneNote Batch 的遗留问题） |
+| 不嵌源文件 | 走打印路径不会插入 PDF 源文件附件，故**无需** `toc-onenote-strip` |
 
 ### 重打印前清空：`toc-onenote-clear`（`cli/onenote_clear.py`）
 
@@ -283,7 +282,7 @@ toc-onenote-clear --notebook "书名_本地" --section-group "书名" --write  #
 
 ## Pipeline 4：OneNote 本地整理
 
-把拆分文件夹用 Pipeline 3（或 OneNote Batch）导入后做收尾。**纯本地离线**：COM 操作本地缓存，不读 Excel、不走网络。
+Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓存，不读 Excel、不走网络。
 
 ### 对齐规则
 

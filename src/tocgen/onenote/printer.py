@@ -1,8 +1,7 @@
 """打印后端：把 PDF 静默打印到 OneNote 桌面版打印机。
 
-复刻 OneNote Batch 的「print to OneNote」路径：配合 client.set_printout_section() 先把
-打印输出定向到目标分区，再由本模块把每个 PDF 打到「OneNote (Desktop)」打印机，OneNote 即在该
-分区新建一页打印输出。
+配合 client.set_printout_section() 先把打印输出定向到目标分区，再由本模块把每个 PDF 打到
+「OneNote (Desktop)」打印机，OneNote 即在该分区新建一页打印输出。
 
 打印引擎用 **SumatraPDF**（免费便携、静默打印、打完自动退出、不抢焦点），比 Adobe 的 `/t` 稳。
 仅 Windows + OneNote 桌面版可用。

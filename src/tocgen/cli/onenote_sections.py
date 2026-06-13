@@ -1,7 +1,7 @@
 """toc-onenote-sections —— Pipeline 2.5：按拆分文件夹数预建「分区组 + 空分区」。
 
 读 books-done/{书名}_拆分/ 下的 0N 文件夹数，在指定笔记本建一个以书名命名的
-分区组 + 同名空分区 01…0N，供 OneNote Batch 导入前准备。纯本地离线（COM）。
+分区组 + 同名空分区 01…0N，供 Pipeline 3 打印前准备。纯本地离线（COM）。
 
     toc-onenote-sections --book "书名"            # dry-run
     toc-onenote-sections --book "书名" --write     # 正式创建（已有在线笔记本）
@@ -118,7 +118,7 @@ def main() -> None:
         print(f"  ✓ 分区「{name}」")
 
     print(f"\n══ 完成：分区组「{book}」+ {len(secs)} 个空分区 ══")
-    print("现在可用 OneNote Batch 把各文件夹插入对应分区，之后用 toc-onenote-titles 收尾。")
+    print("现在可用 toc-onenote-import 把各文件夹的 PDF 打进对应分区，之后用 toc-onenote-titles 收尾。")
 
 
 if __name__ == "__main__":

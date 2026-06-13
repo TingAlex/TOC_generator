@@ -85,11 +85,12 @@ notepad .env   # 填入 SILICONFLOW_API_KEY=sk-你的密钥
 | `toc-init` | 扫描书目，生成/更新 Excel 配置 |
 | `toc-split` | Pipeline 2 单本拆分 |
 | `toc-split-all` | Pipeline 2 批量拆分（读 Excel） |
-| `toc-onenote-sections` | Pipeline 2.5 预建分区组 + 空分区 |
+| `toc-onenote-sections` | Pipeline 2.5 预建分区组 + 空分区（支持 `--local-path` 本地笔记本） |
+| `toc-onenote-clear` | 重打印前清空分区组内所有页（进回收站可恢复） |
 | `toc-onenote-import` | Pipeline 3 打印 PDF 进分区（需 SumatraPDF） |
 | `toc-onenote-fix` | 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据） |
 | `toc-onenote-titles` | Pipeline 4 核对标题 + 删占位页 + 去重 |
-| `toc-onenote-strip` | Pipeline 4 子工具：删除误插入的源文件附件 |
+| `toc-onenote-strip` | 遗留工具：删除误插入的 PDF 附件（当前打印流程不产生此问题） |
 
 每个命令都支持 `--help`。
 
@@ -161,9 +162,9 @@ uv run toc-split "书名" --level 3 --max-pages 100
 | `--folder-digits` | 2 | 文件夹编号位数（2 → `01`） |
 | `--offset` | 自动 | 手动覆盖页码偏移量 |
 
-与 OneNote Batch 配合时，在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`）控制单 PDF 页数。
+在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`）控制单 PDF 页数。
 文件夹按 `max_pages` **硬上限**以「文件」为单位贪心装满（只要 `max_pages_per_file ≤ max_pages` 就绝不超限），
-一章若被切成多份可能落到不同文件夹——优先保证分区大小、便于安全同步。
+一章若被切成多份可能落到不同文件夹——优先保证分区大小，也使每个分区打印后的 `.one` 文件尽量小（避免同步超限）。
 
 ### Pipeline 2.5：OneNote 预建分区组 + 空分区（导入前准备）
 
@@ -174,32 +175,42 @@ uv run toc-split "书名" --level 3 --max-pages 100
 ```powershell
 $env:PYTHONUTF8=1
 uv run toc-onenote-sections --book "书名"            # dry-run 预览
-uv run toc-onenote-sections --book "书名" --write     # 正式创建
-uv run toc-onenote-sections --book "书名" --notebook "新本子" --new-notebook --write  # 新建在线笔记本
+uv run toc-onenote-sections --book "书名" --write     # 在已有笔记本里正式创建
+# 推荐：新建本地笔记本（不同步，无 SharePoint 100MB 限制）
+uv run toc-onenote-sections --book "书名" --local-path "C:\Users\用户\Documents\书名_本地" --write
+# 新建在线笔记本（同级于现有在线笔记本）
+uv run toc-onenote-sections --book "书名" --notebook "新本子" --new-notebook --write
 ```
 
 | 参数 | 说明 |
 |------|------|
 | `--book` | 书名，定位 `books-done/{书名}_拆分/`（部分匹配） |
 | `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--local-path` | **新建本地笔记本**的磁盘绝对路径（文件夹名即笔记本名）；不同步，无 SharePoint 限制；**推荐** |
 | `--new-notebook` | 笔记本不存在时**新建在线笔记本**（做成现有在线笔记本的同级；否则中止报警） |
 | `--ref-notebook` | 新建时作「同级参考」的现有在线笔记本名（缺省取第一个在线笔记本） |
 | `--write` | 真正创建（默认 dry-run） |
 
 > **安全**：默认 dry-run；创建为纯增量（只新增空分区组/空分区）；同名分区组**中止并报警**。
+>
+> **SharePoint 100MB 限制**：在线（OneDrive/SharePoint）笔记本的 `.one` 分区文件有 100MB 同步上限，打印大量 PDF 后极易超限报错。推荐先用 `--local-path` 建本地笔记本接收打印，打印完成后在 OneNote UI 中把整个分区组拖入目标在线笔记本（移动操作不触发该限制）。
 
 ### Pipeline 3：打印 PDF 进分区（toc-onenote-import）
 
-复刻 OneNote Batch 的「print to OneNote」路径，把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的对应分区：
-COM `SetFilingLocation` 把打印输出**定向到目标分区**，再用 **SumatraPDF** 把 PDF 静默打到 `OneNote (Desktop)`
-打印机；**串行**打印——打一份、轮询分区页数 +1 确认落地、再打下一份，保证「打印顺序 = 页显示顺序」。
+把每个 `0N` 文件夹的 PDF 打进 Pipeline 2.5 建好的对应分区：COM `SetFilingLocation` 把打印输出
+**定向到目标分区**，再用 **SumatraPDF** 把 PDF 静默打到 `OneNote (Desktop)` 打印机；**串行**打印——
+打一份、轮询分区页数 +1 确认落地、再打下一份，保证「打印顺序 = 页显示顺序」。
 
 ```powershell
 $env:PYTHONUTF8=1
 # 先装 SumatraPDF（https://www.sumatrapdfreader.org/download-free-pdf-viewer）
-uv run toc-onenote-import --section-group "书名" --section-prefix= --root books-done/书名_拆分            # dry-run 看映射
-uv run toc-onenote-import --section-group "书名" --section-prefix= --root books-done/书名_拆分 --write     # 正式打印
-uv run toc-onenote-import --list --section-group "书名"                                                   # 只读看分区/页
+
+# 重打印前先清空旧页（首次可跳过）
+uv run toc-onenote-clear --notebook "书名_本地" --section-group "书名" --write
+
+uv run toc-onenote-import --notebook "书名_本地" --section-group "书名" --section-prefix= --root books-done/书名_拆分            # dry-run 看映射
+uv run toc-onenote-import --notebook "书名_本地" --section-group "书名" --section-prefix= --root books-done/书名_拆分 --write     # 正式打印
+uv run toc-onenote-import --list --notebook "书名_本地" --section-group "书名"                                                   # 只读看分区/页
 ```
 
 | 参数 | 说明 |
@@ -216,8 +227,9 @@ uv run toc-onenote-import --list --section-group "书名"                       
 | `--write` | 真正打印（默认 dry-run） |
 
 > **前提**：先用 `toc-onenote-sections` 建好 `01…0N` 空分区，且目标笔记本已在 OneNote 桌面版里打开。
-> **打印路径不嵌源文件附件**，故无需 `toc-onenote-strip`。打印后用 `toc-onenote-titles --delete-placeholders --write` 改标题、删占位页。
+> 打印路径**不嵌源文件附件**（无需 `toc-onenote-strip`）。打印后用 `toc-onenote-titles --delete-placeholders --write` 改标题、删占位页。
 > 首跑若 OneNote 仍弹「选择打印输出位置」框，去 OneNote 选项关掉「总是询问打印输出的发送位置」。
+> 打印完成后，在 OneNote UI 中把整个分区组拖入目标在线笔记本即可完成归档（不触发 SharePoint 限制）。
 
 #### 修复 OneNote「正在清理上次打开之后的内容」卡死（toc-onenote-fix）
 
@@ -236,8 +248,7 @@ uv run toc-onenote-import ... --fix --write   # 打印前自动先修一遍
 
 ### Pipeline 4：OneNote 本地整理（核对标题 + 删占位页 + 去重）
 
-用 OneNote Batch 把拆分 PDF 导入后，本工具调用 **OneNote 桌面版本地 COM 接口**核对修正，
-**全程本地离线**（可在关闭同步状态下安全操作）。
+Pipeline 3 打印完成后，调用 **OneNote 桌面版本地 COM 接口**核对修正，**全程本地离线**（可在关闭同步状态下安全操作）。
 
 ```powershell
 $env:PYTHONUTF8=1
@@ -261,10 +272,27 @@ uv run toc-onenote-titles --section-group "书名" --section-prefix= --root book
 
 > **安全**：所有删除进 OneNote **回收站**（可恢复）；标题改动可手动撤销。务必先看 dry-run。
 
-### Pipeline 4 子工具：删除误插入的 PDF 源文件附件
+### 重打印前清空分区（toc-onenote-clear）
 
-OneNote Batch 导入时即便取消勾选「插入 PDF 源文件」，源 PDF 仍可能被作为附件嵌进每一页，
-导致笔记本体积暴涨。本工具逐页删除这些附件，**只删附件、保留打印页图片**。
+重新打印前需先清空目标分区的旧页，防止新旧内容叠加。**删除进回收站，可恢复。**
+
+```powershell
+$env:PYTHONUTF8=1
+uv run toc-onenote-clear --notebook "书名_本地" --section-group "书名"          # dry-run 预览
+uv run toc-onenote-clear --notebook "书名_本地" --section-group "书名" --write   # 真正删除
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--notebook` | 目标笔记本名（默认 `高中数学教辅`） |
+| `--section-group` | 只清空该分区组内的分区（**强烈建议填写**，避免误删其他书） |
+| `--write` | 真正删除（默认 dry-run） |
+
+### Pipeline 4 子工具：删除误插入的 PDF 源文件附件（toc-onenote-strip，遗留工具）
+
+> **当前打印流程（toc-onenote-import）不会产生此问题**，无需使用。此工具保留供历史数据清理。
+
+如果笔记本里存在嵌入的 PDF 附件导致体积暴涨，可用本工具逐页删除，**只删附件、保留打印页图片**。
 
 ```powershell
 $env:PYTHONUTF8=1
@@ -321,7 +349,7 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令
 │       ├── bookmarks.py  bookmarks_one.py  claude_toc.py  init.py
 │       ├── split.py  split_all.py
-│       └── onenote_sections.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
+│       └── onenote_sections.py  onenote_clear.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
 │
 ├── books-todo/   # 放入待处理 PDF（不入库）
 ├── books-done/   # 成品 PDF + {书名}_拆分/ 拆分输出（不入库）

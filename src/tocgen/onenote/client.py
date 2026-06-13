@@ -62,7 +62,7 @@ class Page:
 
 @dataclass
 class InsertedFile:
-    """页内作为附件嵌入的源文件（OneNote Batch 导入时连同打印图片一起塞进来的）。"""
+    """页内作为附件嵌入的源文件（历史遗留，当前打印流程不产生此类附件）。"""
     object_id: str    # 可删除对象的 objectID（最近一个带 objectID 的祖先 OE）
     name: str         # preferredName，如 "117-4.4.1.pdf"
     path_source: str  # pathSource，导入时的源文件磁盘路径（可能为空）
