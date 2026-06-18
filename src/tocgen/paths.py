@@ -39,10 +39,6 @@ def toc_parsed_path(book: str) -> Path:
     return work_dir(book) / "toc_parsed.txt"
 
 
-def ocr_raw_path(book: str) -> Path:
-    return work_dir(book) / "ocr_raw.txt"
-
-
 def split_root(book: str) -> Path:
     """拆分输出根目录：books-done/{书名}_拆分/"""
     return BOOKS_DONE / f"{stem(book)}{SPLIT_SUFFIX}"
@@ -62,7 +58,7 @@ def source_pdf(book: str) -> Path:
 def source_pdf_todo_first(book: str) -> Path:
     """源 PDF：优先 books-todo/（原始版），回退 books-done/。
 
-    Pipeline 1 / Claude 渲染目录时用——希望读未加书签的原始 PDF。
+    Pipeline 1（Claude 看图渲染目录）时用——希望读未加书签的原始 PDF。
     """
     s = stem(book)
     for d in (BOOKS_TODO, BOOKS_DONE):

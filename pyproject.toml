@@ -5,21 +5,16 @@ description = "PDF 目录识别 + 书签 + 按章节拆分 + 打印导入 OneNot
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
-    "anthropic>=0.104.1",
-    "openai>=2.38.0",
     "openpyxl>=3.1.5",
     "pymupdf>=1.27.2.3",
-    "python-dotenv>=1.2.2",
-    # Pipeline 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）
+    # Pipeline 2.5/3/4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）
     "comtypes>=1.4.16; sys_platform == 'win32'",
 ]
 
 # console_scripts 入口：库代码在 src/tocgen/，命令统一 toc-* 前缀。
 # 所有命令都应在项目根目录下运行（数据目录 books-todo/done/work 相对 CWD 解析）。
 [project.scripts]
-toc-bookmarks         = "tocgen.cli.bookmarks:main"        # Pipeline 1 批量（API 识别）
-toc-bookmarks-one     = "tocgen.cli.bookmarks_one:main"    # Pipeline 1 单本调试
-toc-claude            = "tocgen.cli.claude_toc:main"       # Pipeline 1（Claude 版，无 API）
+toc-claude            = "tocgen.cli.claude_toc:main"       # Pipeline 1：渲染目录页 / 写书签（Claude 看图，无 API）
 toc-init              = "tocgen.cli.init:main"             # 初始化 Excel 配置
 toc-split             = "tocgen.cli.split:main"            # Pipeline 2 单本
 toc-split-all         = "tocgen.cli.split_all:main"        # Pipeline 2 批量

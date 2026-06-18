@@ -1,7 +1,7 @@
-"""toc-claude —— Pipeline 1（Claude 版）辅助：渲染目录页 / 写书签，**全程不调用 AI API**。
+"""toc-claude —— Pipeline 1 辅助：渲染目录页 / 写书签，**全程不调用 AI API**。
 
-配合 skill `/toc-by-claude`：用 Claude 对话自身的多模态能力替代 DeepSeek-OCR/V3，
-中间「看图识目录」由 Claude 完成；本工具只做两个纯本地步骤。
+配合 skill `/toc-by-claude`：中间「看图识目录」由 Claude 自身的多模态能力完成，
+直接写出 toc_parsed.txt；本工具只做渲染、写书签两个纯本地步骤。
 
     toc-claude render "书名" --pages 2-4      # 渲染目录页为 PNG
     toc-claude bookmarks "书名" --offset 18   # 由 toc_parsed.txt 写书签
@@ -78,14 +78,13 @@ def cmd_bookmarks(args: argparse.Namespace) -> None:
     count = write_bookmarks(str(pdf), entries, int(offset), str(out))
 
     state["offset"] = int(offset)
-    state["ocr_done"] = True       # 由 Claude 完成（替代 DeepSeek-OCR）
-    state["toc_parsed"] = True     # 由 Claude 完成（替代 DeepSeek-V3）
+    state["toc_parsed"] = True     # 由 Claude 看图识别完成
     state["bookmarks_added"] = True
     state["bookmark_count"] = count
     reg.save(registry)
 
     print(f"✓ 写入 {count} 条书签 → {out}")
-    print(f"  已更新进度：offset={offset}，ocr_done/toc_parsed/bookmarks_added=True")
+    print(f"  已更新进度：offset={offset}，toc_parsed/bookmarks_added=True")
 
 
 def main() -> None:

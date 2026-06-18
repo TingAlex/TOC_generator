@@ -16,7 +16,6 @@ _STATE_TO_COL = {
     "offset":          "offset",
     "toc_pages":       "toc_pages",
     "rendered":        "rendered",
-    "ocr_done":        "ocr_done",
     "toc_parsed":      "toc_parsed",
     "bookmarks_added": "bookmarks_added",
     "bookmark_count":  "bookmark_count",
@@ -82,7 +81,7 @@ def _load_from_excel() -> dict:
             val = d.get(col_name)
             if val is None:
                 continue
-            if state_key in ("rendered", "ocr_done", "toc_parsed", "bookmarks_added"):
+            if state_key in ("rendered", "toc_parsed", "bookmarks_added"):
                 if val:  # 只写 True；False/空 视为未完成
                     state[state_key] = bool(val)
             elif state_key == "offset":

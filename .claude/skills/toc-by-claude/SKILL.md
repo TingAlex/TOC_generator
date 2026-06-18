@@ -1,13 +1,13 @@
 ---
 name: toc-by-claude
-description: 用 Claude 自身的多模态能力替代项目的 DeepSeek-OCR/V3 API 来完成 Pipeline 1（识别目录→写 toc_parsed.txt→加书签）。当用户想「绕过 AI API，直接用 Claude 看图识别目录并加书签」时使用。
+description: 用 Claude 自身的多模态能力完成 Pipeline 1（看图识别目录→写 toc_parsed.txt→加书签），全程零外部 AI/OCR API。当用户想「用 Claude 看图识别 PDF 目录并加书签」时使用。
 ---
 
-# Pipeline 1（Claude 版）：绕过 AI API，用 Claude 看图识别目录并加书签
+# Pipeline 1：用 Claude 看图识别目录并加书签（零 API）
 
-本 skill 固定一条流程：**不调用**项目里的 DeepSeek-OCR / DeepSeek-V3（即
-`tocgen/ai_parse.py` / `tocgen/llm.py` 那条 API 链路），改由**你（Claude）自己的多模态能力**
-读取渲染出的目录页图片，直接产出结构化目录 `toc_parsed.txt`，再写入 PDF 书签。
+本 skill 固定一条流程：由**你（Claude）自己的多模态能力**读取渲染出的目录页图片，
+直接产出结构化目录 `toc_parsed.txt`，再写入 PDF 书签。项目已**不含任何外部 AI API
+链路**（原 DeepSeek-OCR/V3 等 `llm.py`/`ai_parse.py` 调用已移除），目录识别只此一条路。
 
 渲染和写书签这两个纯本地步骤由 `toc-claude` 命令完成（它**不碰任何 API**）；
 中间「看图识目录」这一最费 token 的部分，**派发给一个子任务（subagent）专门完成**，
@@ -67,8 +67,8 @@ uv run toc-claude render "书名" --pages 2-4
 uv run toc-claude bookmarks "书名" --offset 18
 ```
 读 `toc_parsed.txt` → 写 `books-done/{书名}.pdf`，并记录
-`offset / ocr_done / toc_parsed / bookmarks_added / bookmark_count`。
-（`ocr_done`、`toc_parsed` 在这里标记为完成——因为这两步已由 Claude 顶替 API 做掉了。）
+`offset / toc_parsed / bookmarks_added / bookmark_count`。
+（`toc_parsed` 在这里标记为完成——看图识别已由 Claude 在第 2 步做掉。）
 
 ### 5. 收尾 / 交接
 告诉用户已完成，并提示后续流程（不属于本 skill）：
@@ -82,8 +82,8 @@ uv run toc-claude bookmarks "书名" --offset 18
 ---
 
 ## 注意
-- **绝不**调用 `toc-bookmarks`（它带 API-Key 校验且会真去跑 DeepSeek OCR）；本 skill 全程只用
-  `toc-claude` + Claude 自己的视觉，无需任何 `*_API_KEY`。
+- 目录识别全程只用 `toc-claude` + Claude 自己的视觉，**无需任何 `*_API_KEY`**；项目里已不存在
+  调用外部 OCR/解析 API 的命令。
 - PowerShell 传空参数/特殊字符注意引号；书名含括号时用引号包裹。
 - 若某步已完成（registry 标记为 True）想重做，把 `books_config.xlsx` 对应列改回 False，或删 `toc_parsed.txt` 后重跑。
 - 全流程产物可逆、可手工编辑；`--offset` 拿不准时先渲染目录页看「某条目印刷页码 ↔ 它在 PDF 的实际页」推算。

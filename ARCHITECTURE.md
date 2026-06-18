@@ -7,8 +7,7 @@
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │  Pipeline 1：书签   books-todo/*.pdf → 识别目录 → books-done/*.pdf │
-│    · API 版（toc-bookmarks）：DeepSeek-OCR + DeepSeek-V3           │
-│    · Claude 版（toc-claude + /toc-by-claude skill）：Claude 视觉    │
+│    toc-claude + /toc-by-claude skill：Claude 看图，零外部 AI API   │
 └───────────────────────────┬──────────────────────────────────┘
                             │  共享 books-work/books_config.xlsx（单一状态源）
 ┌───────────────────────────▼──────────────────────────────────┐
@@ -36,34 +35,35 @@
 ```
 cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
   │  调用
-编排层：pipeline1（识别→书签）、split（按目录拆分）、onenote/*（建分区/改标题/删附件）
+编排层：split（按目录拆分）、onenote/*（建分区/改标题/删附件）
   │  调用
-领域库：toc（目录模型）、pdf（渲染/书签）、llm + ai_parse（AI 识别）、onenote/client（COM）
+领域库：toc（目录模型）、pdf（渲染/书签）、onenote/client（COM）
   │  调用
 基础设施：paths（路径/书名约定）、registry（每书状态）、bookconfig（Excel 模板/读写）
 ```
 
+> Pipeline 1（识别目录→书签）没有独立的编排模块：目录识别由 Claude 看图完成，
+> `cli/claude_toc.py` 只负责「渲染目录页」「写书签」两个纯本地步骤，直接调 `pdf` + `toc`。
+
 > 关键解耦点：`cli` 不写业务逻辑；所有路径常量只在 `paths` 一处定义；`level|title|page`
-> 的解析/序列化/校验只在 `toc` 一处实现；三个 OneNote CLI 的共享件集中在 `onenote/common`。
+> 的读取/序列化/校验只在 `toc` 一处实现；三个 OneNote CLI 的共享件集中在 `onenote/common`。
 
 ### 模块职责
 
 | 模块 | 职责 |
 |------|------|
 | `paths.py` | 数据目录与书名约定的**单一事实来源**（books-todo/done/work、源 PDF 解析、工作目录助手）。全部相对 CWD（命令在项目根运行） |
-| `toc.py` | 目录模型：`parse_text`（AI 输出→条目，容错）、`load_file`/`dumps`/`save`、`check_nondecreasing`（页码不递减校验） |
+| `toc.py` | 目录模型：`load_file`（读 toc_parsed.txt）、`dumps`/`save`、`check_nondecreasing`（页码不递减校验） |
 | `pdf.py` | 无状态 PDF 工具：`parse_page_spec`、`render_pages_to_images`、`write_bookmarks`、`sanitize_filename` |
-| `llm.py` | LLM 适配层：统一封装硅基流动 / DeepSeek / Anthropic / OpenAI |
-| `ai_parse.py` | 调 OCR/解析模型；条目解析复用 `toc`（不再自带一份解析） |
 | `registry.py` | 每书状态读写，唯一存储 `books_config.xlsx`；Excel 缺失时经 `bookconfig.ensure_books_config` 建骨架再写 |
 | `bookconfig.py` | 两张 Excel 的模板、创建、读取（`books_config` + `split_config`）；`run_init` 为 `toc-init` 入口 |
 | `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset） |
-| `pipeline1.py` | `process_one`：Pipeline 1 交互编排（渲染→OCR→解析→写书签），被批量/单本两个入口复用 |
 | `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、改/删页、列/删附件、`set_printout_section`（打印定向）、`list_section_pages`（轮询） |
 | `onenote/common.py` | 四个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
 | `onenote/printer.py` | 打印后端：定位 SumatraPDF + `print_pdf`（静默打印到 OneNote 桌面打印机） |
 | `onenote/fix.py` | 修复 OneNote「正在清理…」卡死：`fix_relaunch`（杀进程+重启+等就绪，**不删任何文件**） |
-| `cli/*.py` | 11 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
+| `cli/claude_toc.py` | `toc-claude`：Pipeline 1 的两个纯本地步骤——`render`（渲染目录页）与 `bookmarks`（由 toc_parsed.txt 写书签）；中间看图识别由 Claude 完成 |
+| `cli/*.py` | 9 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
 
 ---
 
@@ -71,21 +71,22 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 
 ### Pipeline 1（书签）
 
+目录识别**完全依赖 Claude 自身的多模态能力**，项目内不含任何外部 AI / OCR API 调用。
+
 ```
 books-todo/{书名}.pdf
-    │  render_pages_to_images()          [pdf]
+    │  toc-claude render → render_pages_to_images()   [pdf]
     ▼  books-work/{书名}/pages/page_*.png
-    │  ocr_pages()                       [ai_parse → llm]   (Claude 版跳过，用视觉)
-    ▼  books-work/{书名}/ocr_raw.txt
-    │  parse_toc_text()                  [ai_parse → toc.parse_text]
+    │  Claude 看图识别（/toc-by-claude 派发子任务，直接写文件）
     ▼  books-work/{书名}/toc_parsed.txt   ← 可手工编辑
-    │  write_bookmarks()                 [pdf]
+    │  toc-claude bookmarks → write_bookmarks()        [pdf]
     ▼  books-done/{书名}.pdf
 ```
 
-每完成一步 `registry.save()` 写回 Excel flag，中断重启自动跳过已完成步骤。
-`process_one` 在 `pipeline1.py`，被 `cli/bookmarks.py`（批量）与 `cli/bookmarks_one.py`（单本）复用。
-Claude 版（`cli/claude_toc.py`）只跑「渲染」和「写书签」，中间识图由 Claude 自身完成。
+`render` 与 `bookmarks` 是 `cli/claude_toc.py` 的两个子命令，各自完成后
+`registry.save()` 写回 Excel flag（`rendered` / `toc_parsed` / `bookmarks_added`），
+中断重启可从已记录的 `toc_pages`/`offset` 续跑。中间「看图识目录 → 写 toc_parsed.txt」
+由 Claude（经 `/toc-by-claude` skill 派发的子任务）用自身视觉完成，**不调用任何 API**。
 
 ### Pipeline 2（拆分）
 
@@ -106,7 +107,7 @@ toc_parsed.txt → toc.load_file() → 按 level 过滤 → toc.check_nondecreas
 ### 唯一存储：`books-work/books_config.xlsx`
 
 一行一本书，`registry.save()` 增量同步。字段 ←→ 列见 `registry._STATE_TO_COL`，
-主键统一为 `"{书名}.pdf"`。列：`书名 offset toc_pages split_level rendered ocr_done
+主键统一为 `"{书名}.pdf"`。列：`书名 offset toc_pages split_level rendered
 toc_parsed bookmarks_added bookmark_count 拆分完成`。
 
 ### 冷启动：Excel 缺失时自动建表
@@ -344,10 +345,7 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 | 包 | 用途 |
 |----|------|
 | `pymupdf` | PDF 渲染、书签写入、页面提取与切片 |
-| `openai` | 兼容 OpenAI 接口的 provider（硅基流动、DeepSeek） |
-| `anthropic` | Anthropic Claude |
 | `openpyxl` | 读写 Excel 配置 |
-| `python-dotenv` | 从 `.env` 加载 API Key |
 | `comtypes` | Pipeline 2.5 / 3 / 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
 | **SumatraPDF**（外部 exe，非 Python 包） | Pipeline 3 打印后端：`-print-to "OneNote (Desktop)" -silent` 静默打印。经 `subprocess` 调用，不入 `dependencies` |
 

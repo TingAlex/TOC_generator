@@ -1,6 +1,6 @@
 # PDF 自动识别目录 · 添加书签 · 按章节拆分 · OneNote 整理
 
-将 PDF 中的目录页用 AI（或 Claude 视觉）识别，自动生成 PDF 书签（大纲），再按目录层级把整本 PDF 拆分成独立章节文件，并提供把成果导入 OneNote 的本地整理工具。适用于扫描版教材、无书签的电子书等场景。
+将 PDF 中的目录页交给 **Claude 自身的多模态能力**看图识别，自动生成 PDF 书签（大纲），再按目录层级把整本 PDF 拆分成独立章节文件，并提供把成果导入 OneNote 的本地整理工具。适用于扫描版教材、无书签的电子书等场景。**目录识别全程不调用任何外部 AI / OCR API。**
 
 > 代码组织为一个可安装的包 `src/tocgen/`，对外暴露一组 `toc-*` 命令（console_scripts）。
 > **所有命令都在项目根目录下运行**（数据目录 `books-todo/`、`books-done/`、`books-work/` 相对当前目录解析）。
@@ -12,13 +12,11 @@
 ```
 books-todo/*.pdf
       │
-      ▼  uv run toc-bookmarks            【Pipeline 1：书签（API 识别）】
-      │   或  uv run toc-claude          【Pipeline 1（Claude 版，零 API）】
+      ▼  /toc-by-claude（skill）+ uv run toc-claude   【Pipeline 1：书签（Claude 看图，零 API）】
       │
-      ├─[1] 渲染目录页为图片 (300 DPI)
-      ├─[2] OCR 识别（DeepSeek-OCR / 或 Claude 视觉）
-      ├─[3] 解析为目录结构 → books-work/{书名}/toc_parsed.txt
-      └─[4] 写入 PDF 书签 (--write)  → books-done/{书名}.pdf
+      ├─[1] toc-claude render：渲染目录页为图片 (300 DPI)
+      ├─[2] Claude 看图识别目录结构 → books-work/{书名}/toc_parsed.txt
+      └─[3] toc-claude bookmarks：写入 PDF 书签 → books-done/{书名}.pdf
       │
       ▼  uv run toc-init                 【初始化配置 Excel】
       │
@@ -49,7 +47,7 @@ books-todo/*.pdf
 
 - **Python 3.14+**（建议通过 `uv` 自动管理）
 - **uv**（Python 包管理器）
-- **API Key**（仅 Pipeline 1 的 API 版需要，任选其一）：硅基流动（推荐）、DeepSeek、Anthropic、OpenAI
+- **Claude Code**（Pipeline 1 的目录识别由 Claude 看图完成，通过 `/toc-by-claude` skill 驱动；**无需任何 AI / OCR API Key**）
 - **（仅 Pipeline 2.5 / 3 / 4 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）
 - **（仅 Pipeline 3 需要）** [SumatraPDF](https://www.sumatrapdfreader.org/download-free-pdf-viewer)（静默打印 PDF 到 OneNote 打印机）
 
@@ -65,11 +63,9 @@ powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | ie
 git clone https://github.com/TingAlex/TOC_generator.git
 cd TOC_generator
 uv sync
-
-# 3. 配置 API Key（仅 Pipeline 1 API 版需要）
-Copy-Item .env.example .env
-notepad .env   # 填入 SILICONFLOW_API_KEY=sk-你的密钥
 ```
+
+> 无需配置任何 API Key——目录识别由 Claude 看图完成。
 
 > 改动 `src/tocgen/` 后通常无需重装（editable 安装）；改了 `pyproject.toml`（如新增命令）后重跑 `uv sync`。
 
@@ -79,9 +75,7 @@ notepad .env   # 填入 SILICONFLOW_API_KEY=sk-你的密钥
 
 | 命令 | 作用 |
 |------|------|
-| `toc-bookmarks` | Pipeline 1 批量：API 识别目录 + 加书签 |
-| `toc-bookmarks-one` | Pipeline 1 单本调试 |
-| `toc-claude` | Pipeline 1（Claude 版）辅助：`render` / `bookmarks`，不调用 API |
+| `toc-claude` | Pipeline 1 辅助：`render`（渲染目录页）/ `bookmarks`（写书签），不调用 API；配合 `/toc-by-claude` skill |
 | `toc-init` | 扫描书目，生成/更新 Excel 配置 |
 | `toc-split` | Pipeline 2 单本拆分 |
 | `toc-split-all` | Pipeline 2 批量拆分（读 Excel） |
@@ -98,16 +92,18 @@ notepad .env   # 填入 SILICONFLOW_API_KEY=sk-你的密钥
 
 ## 使用方法
 
-### Pipeline 1：识别目录 + 添加书签
+### Pipeline 1：用 Claude 看图识别目录 + 添加书签
 
-```powershell
-# 将 PDF 放入 books-todo/
-uv run toc-bookmarks            # dry-run：跑识别，不写文件
-uv run toc-bookmarks --write    # 确认无误后正式写入书签
-```
+目录识别由 **Claude 自身的多模态能力**完成，**不调用任何外部 AI / OCR API**。
+在 Claude Code 对话里输入 **`/toc-by-claude`** 触发该 skill，它固定走：
 
-运行时交互式询问目录页范围（如 `7`、`7-9`）和偏移量（PDF 实际页码 vs 印刷页码）。
-若已在 `books_config.xlsx` 的 `toc_pages` / `offset` 列预填，则跳过对应询问。
+1. `uv run toc-claude render "书名" --pages 2-4` 渲染目录页为 PNG（**不调用任何 API**）；
+2. 派发一个**子任务**让 Claude 直接看这些 PNG，写出 `books-work/{书名}/toc_parsed.txt`；
+3. `uv run toc-claude bookmarks "书名" --offset 18` 写入书签 → `books-done/{书名}.pdf`。
+
+目录页范围（如 `7`、`7-9`）和偏移量（PDF 实际页码 vs 印刷页码）在 skill 流程中确定；
+若已在 `books_config.xlsx` 的 `toc_pages` / `offset` 列预填，则可直接复用。
+进度照常记入 `books_config.xlsx`。skill 定义见 `.claude/skills/toc-by-claude/SKILL.md`。
 
 识别完成后，`books-work/{书名}/toc_parsed.txt` 可手工编辑修正，格式为 `层级|标题|印刷页码`：
 
@@ -117,16 +113,8 @@ uv run toc-bookmarks --write    # 确认无误后正式写入书签
 3|1.1.1 细目|15
 ```
 
-#### Pipeline 1（Claude 版）：绕过 AI API，用 Claude 看图识别目录
-
-不想消耗 API 额度时，在新的 Claude Code 对话里输入 **`/toc-by-claude`** 触发该 skill，它会固定走：
-
-1. `uv run toc-claude render "书名" --pages 2-4` 渲染目录页为 PNG（**不调用任何 API**）；
-2. 派发一个**子任务**让 Claude 直接看这些 PNG，写出 `books-work/{书名}/toc_parsed.txt`；
-3. `uv run toc-claude bookmarks "书名" --offset 18` 写入书签 → `books-done/{书名}.pdf`。
-
-进度照常记入 `books_config.xlsx`。skill 定义见 `.claude/skills/toc-by-claude/SKILL.md`，
-`toc-claude` 全程无需任何 `*_API_KEY`。
+> 也可不用 skill 而手动驱动：先 `uv run toc-claude render "书名" --pages 2-4`，再自行让 Claude
+> 看 `books-work/{书名}/pages/*.png` 写出 `toc_parsed.txt`，最后 `uv run toc-claude bookmarks "书名" --offset 18`。
 
 ### 初始化配置 Excel
 
@@ -139,7 +127,7 @@ uv run toc-init   # 扫描所有书，生成/更新 Excel 配置（新书入库�
 | `books-work/books_config.xlsx` | 每本书一行：进度 flag、offset、拆分层级、是否完成 |
 | `books-work/split_config.xlsx` | 全局格式：文件夹大小上限、单文件页数上限、前缀位数等 |
 
-> Excel 不存在时（如新机器克隆后），Pipeline 1 / `toc-claude` 首次写状态会**自动建表**，无需先跑 `toc-init`；`toc-init` 仍用于批量登记书目和生成 `split_config.xlsx`。
+> Excel 不存在时（如新机器克隆后），`toc-claude` 首次写状态会**自动建表**，无需先跑 `toc-init`；`toc-init` 仍用于批量登记书目和生成 `split_config.xlsx`。
 
 ### Pipeline 2：按章节拆分 PDF
 
@@ -315,7 +303,7 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 ## 进度管理（Excel）
 
 `books-work/books_config.xlsx` 是项目的统一监控面板（列：`书名` `offset` `toc_pages` `split_level`
-`rendered` `ocr_done` `toc_parsed` `bookmarks_added` `bookmark_count` `拆分完成`）。
+`rendered` `toc_parsed` `bookmarks_added` `bookmark_count` `拆分完成`）。
 
 **重做某步**：在 Excel 中把对应列改为 `False`，下次运行自动从该步重做。例如：
 - 改 `toc_parsed.txt` 后重写书签 → `bookmarks_added` 改 False
@@ -328,26 +316,22 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 ```
 .
 ├── pyproject.toml           # 依赖 + console_scripts（toc-* 命令）
-├── .env.example             # API Key 模板
-├── .claude/skills/toc-by-claude/SKILL.md   # /toc-by-claude（Claude 版 Pipeline 1）
+├── .claude/skills/toc-by-claude/SKILL.md   # /toc-by-claude（Pipeline 1：Claude 看图识别目录）
 │
 ├── src/tocgen/              # 可安装包：库代码
 │   ├── paths.py             # 路径与书名约定（单一事实来源）
-│   ├── toc.py               # 目录模型：解析/序列化/校验
+│   ├── toc.py               # 目录模型：读取/序列化/校验
 │   ├── pdf.py               # 渲染页面 / 写书签 / 文件名净化
-│   ├── llm.py               # LLM 适配（硅基流动/DeepSeek/Anthropic/OpenAI）
-│   ├── ai_parse.py          # OCR + 目录解析（调 llm，复用 toc）
 │   ├── registry.py          # 每书状态读写（Excel）
 │   ├── bookconfig.py        # Excel 模板/创建/读取（books_config + split_config）
 │   ├── split.py             # 按目录拆分编排（run_split）
-│   ├── pipeline1.py         # Pipeline 1 编排（process_one）
 │   ├── onenote/
 │   │   ├── client.py        # OneNote 桌面 COM 薄封装（含打印定向/分区页轮询）
 │   │   ├── common.py        # OneNote CLI 共享：默认笔记本/编号解析/排序/范围限定
 │   │   ├── printer.py       # 打印后端：SumatraPDF 静默打印到 OneNote 打印机
 │   │   └── fix.py           # 修复「正在清理…」卡死：杀进程+重启+等就绪（不删数据）
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令
-│       ├── bookmarks.py  bookmarks_one.py  claude_toc.py  init.py
+│       ├── claude_toc.py  init.py
 │       ├── split.py  split_all.py
 │       └── onenote_sections.py  onenote_clear.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
 │
@@ -358,13 +342,9 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 
 ---
 
-## 模型说明（Pipeline 1 API 版）
+## 目录识别说明
 
-| 用途 | 默认模型 | Provider |
-|------|----------|----------|
-| OCR 识别 | `deepseek-ai/DeepSeek-OCR` | 硅基流动（限时免费） |
-| 目录解析 | `deepseek-ai/DeepSeek-V3` | 硅基流动（按量计费） |
-
-`.env` 中 `LLM_MODEL=模型名` 可覆盖解析模型。多 Provider 优先级：
-`SILICONFLOW_API_KEY` > `DEEPSEEK_API_KEY` > `ANTHROPIC_API_KEY` > `OPENAI_API_KEY`。
-使用非硅基流动 provider 时，OCR 与解析合并为单次视觉模型调用。
+Pipeline 1 的目录识别**完全依赖 Claude 自身的多模态能力**：`toc-claude render` 把目录页渲染为
+PNG，Claude（经 `/toc-by-claude` skill 派发的子任务）直接看图、转写并结构化为
+`toc_parsed.txt`，再由 `toc-claude bookmarks` 写入书签。**不调用任何外部 AI / OCR API，
+也无需任何 API Key。**
