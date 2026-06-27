@@ -185,6 +185,8 @@ Pipeline 3 打印前的准备步。**纯本地离线**（COM），按 `books-don
   OneDrive 路径，求父目录拼新名，`OpenHierarchy(newUrl, "", cftNotebook)` → 落在同一云端位置。
 - **新建本地笔记本**（`--local-path`）：`OpenHierarchy(磁盘绝对路径, "", cftNotebook)` → 纯本地
   `.one` 文件，不同步，**无 SharePoint 100MB 限制**。目标笔记本是在线笔记本时首选此方案。
+  默认落在 `C:\Users\用户\Documents\OneNote 笔记本\`。注意此分支**不查重**已有同名笔记本/分区组
+  （在线分支才查），动手前先自查目标目录干净。
 
 ### SharePoint 100MB 限制与本地笔记本方案
 
@@ -220,6 +222,7 @@ toc-onenote-titles --notebook "书名_本地" --section-group "书名" --section
 | 创建用 `OpenHierarchy(path, relativeToObjectID, [out]objectID, cftIfNotExist)`，`[out]` 在 comtypes 早绑定下转为返回值 | 调用只传 `(path, rel, cft)`，新 ID 取返回值 |
 | `CreateFileType` 枚举 | `cftNotebook=1` / `cftFolder=2`（分区组）/ `cftSection=3`（分区） |
 | **分区路径必须带 `.one`**，否则 `OpenHierarchy` 抛 `COMError 0x80042004`；分区组/文件夹不带 | `create_section` 自动补 `.one`；OneNote 显示时去掉 |
+| **本地笔记本路径必须用反斜杠 `\`**（原生 Windows 路径），正斜杠 `/` 抛 `COMError 0x80042006` | `--local-path` 传 `C:\…\本子名`；用 PowerShell 原生反斜杠路径，别用 Bash 的 `/` 风格（comtypes 把字符串原样交给 OneNote，OneNote 只认 Windows 路径） |
 | 取笔记本在线/本地 | `get_hierarchy` 读 Notebook 的 `path`；在线笔记本以 `https://` 开头 |
 
 ---
@@ -300,6 +303,11 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 双保险：标题属于占位集合（`无标题页` 等）**且** 页内无 `<one:Image>`、无非空 `<one:T>`。
 打印页必含图片，绝不会被误判。失败未改名的页显示 OneNote 默认标题「打印输出」，由改标题步改正。
 
+> **刚建分区直接打印时没有占位页可删**：分区由 Pipeline 2.5 建好后**立即**打印，第一份打印输出会
+> 落在那张空占位页上、把它变成打印页，不再单独留 `无标题页`。于是每个分区正好是文件数那么多页、
+> 全为「打印输出」，`--delete-placeholders` 报 `删0`，天然 1:1 干净对齐。占位页删除逻辑主要兜底
+> **先建分区、隔一段时间或手动操作后才打印**而残留空占位页的情况。
+
 ### 去重（`--dedupe`）
 
 仅当分区页数**正好是文件数 2 倍**（误打印两遍）时，删除后一份重复块（进回收站），保留前一份继续对齐。
@@ -321,6 +329,15 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 
 ### OneNote 开发环境须知（换机器开发必读）
 
+- **数据目录与代码解耦**：`books-todo/ books-done/ books-work/` 默认相对**当前工作目录**解析
+  （见 `paths.py`），可放在仓库外（本机即放在 OneDrive 同步盘
+  `C:\Users\用户\OneDrive\高中数学教辅材料拆分\`）。换机器/换位置时不改代码，只把 **cwd 设到数据根目录**
+  再跑 `toc-*`（用仓库 venv 里的可执行文件即可，`uv run` 会指向仓库内的空数据目录，故直接调
+  `.venv\Scripts\toc-*.exe`）。
+- **「拆分完成」flag 不可信**：`books_config.xlsx` 该列可能标 `true` 但磁盘上并无
+  `books-done/{书名}_拆分/`。判断是否已拆**看磁盘目录**，别信 flag；flag=true 会让 `toc-split-all`
+  跳过，需补拆时用单本 `toc-split "全名" --level N` 绕过。`--book` 是子串匹配，过滤用完整书名
+  （「必修第一册」会连带命中「选择性必修第一册」）。
 - **为什么走桌面 COM 而非 Graph**：用户刻意关闭 OneNote 同步做离线编辑；桌面 COM 操作本地缓存，
   离线免鉴权，改动随之后同步上传。Graph 则必须联网 + OAuth。
 - **平台限制**：仅 Windows + OneNote 桌面版（Office16），**不支持** UWP「OneNote for Windows 10」。
