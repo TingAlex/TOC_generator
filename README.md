@@ -83,6 +83,7 @@ uv sync
 | `toc-init` | 扫描书目，生成/更新 Excel 配置 |
 | `toc-split` | Pipeline 2 单本拆分 |
 | `toc-split-all` | Pipeline 2 批量拆分（读 Excel） |
+| `toc-boundaries` | Pipeline 2 辅助：渲染拆分边界页顶部 montage，供 Claude 判读 fresh/shared（边界重叠） |
 | `toc-onenote-sections` | Pipeline 2.5 预建分区组 + 空分区（支持 `--local-path` 本地笔记本） |
 | `toc-onenote-clear` | 重打印前清空分区组内所有页（进回收站可恢复） |
 | `toc-onenote-import` | Pipeline 3 打印 PDF 进分区（需 SumatraPDF） |
@@ -166,6 +167,33 @@ uv run toc-split "书名" --level 3 --max-pages 100
 > offset 是全书一个的全局常量，只有两文件错位通常是 `toc_parsed.txt` 里**某节印刷页码识别错**。
 > 渲染源 PDF 边界附近页核对真实起始页，改对应行页码即可，并可只重切受影响的两个文件而不全量重跑。
 > 完整诊断与「只重切」做法见 ARCHITECTURE.md「拆分边界排查与只重切受影响文件」。
+
+#### 边界重叠：保证 PDF1 完整（toc-boundaries）
+
+拆分时第 N 节取 `[起页, 下一节起页-1]`，下一节起页那一**整页**归 PDF2。若下一节在该页**中间**才开始
+（如上一节课后训练做到一半，或下一节是「（略）」省略节、标题只在页底一行），则该页顶部是第 N 节的结尾，
+没进 PDF1 → **PDF1 不完整**。`toc-boundaries` 渲染每个边界页顶部供判读，对确实「上一节残留」的边界，
+把**前一节末尾 +1 页**（整页并入，与下一节首页重叠一页），保证 PDF1 完整。
+
+```powershell
+# 1) 渲染各边界页顶部 → montage（先确保 toc_parsed.txt 页码已校正）
+$env:PYTHONUTF8=1
+uv run toc-boundaries render "书名"
+# 2) 看图判读每个边界：顶部是「新节标题横幅」=fresh（跳过）；「上一节正文/习题残留」=shared
+# 3) 把 shared 边界写入 books-work/{书}/boundary_overlap.txt（每行 `印刷页|标题`，照抄 toc_parsed.txt 标题）
+# 4) 重切：toc-split / toc-split-all 会自动读 sidecar，把对应前一节 +1 页
+```
+
+| 参数（`toc-boundaries render`） | 默认 | 说明 |
+|------|------|------|
+| `--level` | 3 | 拆分最大层级（须与拆分时一致） |
+| `--offset` | 自动 | 页码偏移量（不填从 Excel 读） |
+| `--top-frac` | 0.45 | 渲染每个边界页顶部的比例 |
+| `--cols` / `--per-montage` | 2 / 6 | montage 列数 / 每张格子数 |
+
+> **判读偏安全**：把 shared 误判成 fresh 会让 PDF1 残缺，故**存疑就标 shared**（宁可多一页也不残缺）。
+> `boundary_overlap.txt` 不存在 = 全部 fresh（向后兼容）。overlap 多半只给个别节 +1 页；若没把后续文件挤过
+> `max_pages` 文件夹边界，则**只有那一个 PDF1 文件变**，就地重切它即可（无需全量重切/重同步）。
 
 ### Pipeline 2.5：OneNote 预建分区组 + 空分区（导入前准备）
 
@@ -337,7 +365,8 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 │   ├── pdf.py               # 渲染页面 / 写书签 / 文件名净化
 │   ├── registry.py          # 每书状态读写（Excel）
 │   ├── bookconfig.py        # Excel 模板/创建/读取（books_config + split_config）
-│   ├── split.py             # 按目录拆分编排（run_split）
+│   ├── split.py             # 按目录拆分编排（run_split，含边界重叠 overlap）
+│   ├── boundary.py          # 拆分边界分析：渲染边界页顶部 montage 供判读 fresh/shared
 │   ├── onenote/
 │   │   ├── client.py        # OneNote 桌面 COM 薄封装（含打印定向/分区页轮询）
 │   │   ├── common.py        # OneNote CLI 共享：默认笔记本/编号解析/排序/范围限定
@@ -345,7 +374,7 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 │   │   └── fix.py           # 修复「正在清理…」卡死：杀进程+重启+等就绪（不删数据）
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令
 │       ├── claude_toc.py  init.py
-│       ├── split.py  split_all.py
+│       ├── split.py  split_all.py  boundaries.py
 │       └── onenote_sections.py  onenote_clear.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
 │
 ├── books-todo/   # 放入待处理 PDF（不入库）

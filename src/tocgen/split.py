@@ -31,8 +31,35 @@ def _sp(s: str) -> None:
         print(s.encode(enc, errors="replace").decode(enc))
 
 
-def _section_ranges(filtered: list[dict], offset: int, total_pages: int) -> list[tuple]:
-    """算出每个条目的 PDF 页面范围 → [(title, pdf_start, pdf_end, level)]。"""
+def load_boundary_overlap(book: str) -> set[tuple[int, str]]:
+    """读边界重叠 sidecar `boundary_overlap.txt` → `{(印刷页, 标题)}`。
+
+    每行 `印刷页|标题`（# 开头或空行忽略）。文件不存在 → 空集（向后兼容，行为同现状）。
+    """
+    path = paths.boundary_overlap_path(book)
+    if not path.exists():
+        return set()
+    overlap: set[tuple[int, str]] = set()
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        page_str, _, title = line.partition("|")
+        try:
+            overlap.add((int(page_str.strip()), title.strip()))
+        except ValueError:
+            print(f"  警告：boundary_overlap.txt 行无法解析，已跳过：{line!r}")
+    return overlap
+
+
+def _section_ranges(filtered: list[dict], offset: int, total_pages: int,
+                    overlap: set[tuple[int, str]] | None = None) -> list[tuple]:
+    """算出每个条目的 PDF 页面范围 → [(title, pdf_start, pdf_end, level)]。
+
+    overlap：`{(印刷页, 标题)}` 集合，标记「首页被上一节内容占顶」的边界条目（下一节）。
+    命中时把**前一节**的结尾页 +1，使其完整包含残留页（与下一节首页重叠一页）。详见 boundary.py。
+    """
+    overlap = overlap or set()
     sections = []
     for i, e in enumerate(filtered):
         lv, title, start = e["level"], e["title"], e["page"]
@@ -43,7 +70,9 @@ def _section_ranges(filtered: list[dict], offset: int, total_pages: int) -> list
         else:
             for j in range(i + 1, len(filtered)):
                 if filtered[j]["level"] <= lv:
-                    end = filtered[j]["page"] - 1
+                    nxt = filtered[j]
+                    # 该边界被标为 shared → 本节延伸到下一节首页（含残留），否则到其前一页
+                    end = nxt["page"] if (nxt["page"], nxt["title"]) in overlap else nxt["page"] - 1
                     break
         pdf_start = start + offset
         if pdf_start > total_pages:
@@ -125,6 +154,11 @@ def run_split(
         raise ValueError(f"toc_parsed.txt 中没有第 {level} 层及以上条目")
     toc_mod.check_nondecreasing(filtered)
 
+    # 边界重叠：被上一节占顶的边界条目，使前一节延伸 +1 页保完整（详见 boundary.py）
+    overlap = load_boundary_overlap(book)
+    if overlap:
+        print(f"边界重叠：{len(overlap)} 个边界标为 shared（前一节末尾各 +1 页）")
+
     src = fitz.open(str(pdf_path))
     total_pages = len(src)
     print(f"源 PDF：{pdf_path.name}，共 {total_pages} 页")
@@ -133,7 +167,7 @@ def run_split(
           + (f"，单文件页数上限：{max_pages_per_file}" if max_pages_per_file else "") + "\n")
 
     # 1) 章节页面范围 → 2) 展开为输出文件列表（每个文件 ≤ max_pages_per_file）
-    sections = _section_ranges(filtered, offset, total_pages)
+    sections = _section_ranges(filtered, offset, total_pages, overlap)
     planned = _plan_files(sections, book=book, filtered=filtered, offset=offset,
                           total_pages=total_pages, max_pages_per_file=max_pages_per_file,
                           prefix_digits=prefix_digits, prefix_sep=prefix_sep)

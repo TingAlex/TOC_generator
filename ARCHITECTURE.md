@@ -57,13 +57,15 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 | `pdf.py` | 无状态 PDF 工具：`parse_page_spec`、`render_pages_to_images`、`write_bookmarks`、`sanitize_filename` |
 | `registry.py` | 每书状态读写，唯一存储 `books_config.xlsx`；Excel 缺失时经 `bookconfig.ensure_books_config` 建骨架再写 |
 | `bookconfig.py` | 两张 Excel 的模板、创建、读取（`books_config` + `split_config`）；`run_init` 为 `toc-init` 入口 |
-| `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset） |
+| `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset）；`load_boundary_overlap` 读边界重叠 sidecar |
+| `boundary.py` | 拆分边界分析：`compute_boundaries`（找相邻两节的边界）+ 渲染边界页顶部裁剪 + 拼 montage（仅 pymupdf），供 Claude 看图判读 fresh/shared |
 | `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、改/删页、列/删附件、`set_printout_section`（打印定向）、`list_section_pages`（轮询） |
 | `onenote/common.py` | 四个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
 | `onenote/printer.py` | 打印后端：定位 SumatraPDF + `print_pdf`（静默打印到 OneNote 桌面打印机） |
 | `onenote/fix.py` | 修复 OneNote「正在清理…」卡死：`fix_relaunch`（杀进程+重启+等就绪，**不删任何文件**） |
 | `cli/claude_toc.py` | `toc-claude`：Pipeline 1 的两个纯本地步骤——`render`（渲染目录页）与 `bookmarks`（由 toc_parsed.txt 写书签）；中间看图识别由 Claude 完成 |
-| `cli/*.py` | 9 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
+| `cli/boundaries.py` | `toc-boundaries render`：渲染拆分边界页顶部 montage，供 Claude 判读 fresh/shared（边界重叠用） |
+| `cli/*.py` | 10 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
 
 ---
 
@@ -207,6 +209,34 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
    （若改动会改变总页数或跨越文件夹边界，则必须全量重切。）
 4. **OneDrive 占用坑**：源/目标在 OneDrive 同步盘时，`pymupdf` 原地覆盖（先删后写）可能瞬时报
    `FzErrorSystem ... Permission denied`。改为写 `*.new.pdf` 临时文件再 `os.replace` 原子替换（带重试）规避。
+
+### 4. 边界重叠：保证 PDF1 完整（toc-boundaries + boundary_overlap.txt）
+
+**问题**：第 N 节取 `[起页, 下一节起页-1]`，下一节起页那一**整页**归 PDF2。若下一节在该页**中间**才
+开始（典型：上一节的「课后强化训练」做到一半，或下一节是「（略）」省略节、标题只占该页底部一行），
+则该页顶部是第 N 节的结尾——没进 PDF1 → **PDF1 不完整**。约束：可接受 PDF2 带上一节残留，但 PDF1 必须完整。
+
+**有界结论**：每个受影响的 PDF1 **只需 +1 页**（那张边界页）——下一节标题一定在边界页上，残留最多到这页。
+
+**数据流**（仿 Pipeline 1：CLI 渲染 → Claude 看图 → sidecar → split 消费）：
+
+```
+toc_parsed.txt(+offset) ──toc-boundaries render──▶ books-work/{书}/boundaries/montage_*.png + 清单
+   compute_boundaries 找出所有「相邻两节」边界 → 渲染各边界页(=PDF2首页)顶部~45%裁剪 → 拼 montage
+                                                          │  Claude 批量看图判读每个边界
+                                                          ▼      顶部是「新节标题横幅」=fresh；「上一节正文/习题残留」=shared
+                          books-work/{书}/boundary_overlap.txt   （每行 `印刷页|标题`，仅列 shared 边界；可手工编辑）
+                                                          │  run_split → load_boundary_overlap()
+                                                          ▼
+   _section_ranges：shared 边界处把**前一节** end 由 `下一节.page-1` 改为 `下一节.page`（+1 页，越界仍兜底）
+```
+
+- **键 = 边界条目 `(印刷页, 标题)`**（= 被占顶的「下一节」），与 toc 风格一致、对重新过滤稳健。
+  只动 level-scan 分支，不动「紧邻同页」分支。sidecar 缺省空 → 完全向后兼容（行为同现状）。
+- **整页并入**：PDF1 末页 = 边界页（含本节尾 + 下节头），与 PDF2 首页重叠一页；实现简单、无损。
+- **判读偏安全**：把 shared 误判成 fresh 会让 PDF1 残缺（违约束），故**存疑就标 shared**（宁多一页不残缺）。
+- **影响最小化**：overlap 只给个别节 +1 页。若该 +1 没把后续文件挤过 `max_pages` 文件夹边界
+  （可在重切前用计划对比算出），则**只有那一个 PDF1 文件变**，就地重切它即可，无需全量重切/重同步。
 
 ---
 

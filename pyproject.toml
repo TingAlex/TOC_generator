@@ -1,6 +1,6 @@
 [project]
 name = "pdf-toc"
-version = "1.0.0"
+version = "1.1.0"
 description = "PDF 目录识别 + 书签 + 按章节拆分 + 打印导入 OneNote + 本地整理"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -18,6 +18,7 @@ toc-claude            = "tocgen.cli.claude_toc:main"       # Pipeline 1：渲染
 toc-init              = "tocgen.cli.init:main"             # 初始化 Excel 配置
 toc-split             = "tocgen.cli.split:main"            # Pipeline 2 单本
 toc-split-all         = "tocgen.cli.split_all:main"        # Pipeline 2 批量
+toc-boundaries        = "tocgen.cli.boundaries:main"       # Pipeline 2 辅助：渲染拆分边界页供判读 fresh/shared
 toc-onenote-sections  = "tocgen.cli.onenote_sections:main" # Pipeline 2.5 建分区组+空分区（支持 --local-path 本地笔记本）
 toc-onenote-clear     = "tocgen.cli.onenote_clear:main"    # Pipeline 3 前：清空分区所有页（重打印前用，进回收站可恢复）
 toc-onenote-import    = "tocgen.cli.onenote_import:main"   # Pipeline 3 打印 PDF 进分区（需 SumatraPDF）

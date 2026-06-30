@@ -39,6 +39,16 @@ def toc_parsed_path(book: str) -> Path:
     return work_dir(book) / "toc_parsed.txt"
 
 
+def boundary_overlap_path(book: str) -> Path:
+    """边界重叠 sidecar：标记「首页被上一节占顶」的边界条目（详见 boundary.py / split.py）。"""
+    return work_dir(book) / "boundary_overlap.txt"
+
+
+def boundaries_dir(book: str) -> Path:
+    """toc-boundaries 渲染的边界页裁剪 / montage 输出目录。"""
+    return work_dir(book) / "boundaries"
+
+
 def split_root(book: str) -> Path:
     """拆分输出根目录：books-done/{书名}_拆分/"""
     return BOOKS_DONE / f"{stem(book)}{SPLIT_SUFFIX}"
