@@ -41,6 +41,10 @@ books-todo/*.pdf
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
 
+> **默认处理范围**：「把新书按流程处理一遍」默认只跑到 **Pipeline 2（拆分）** 为止。
+> OneNote 步骤（Pipeline 2.5 / 3 / 4）是开着 OneNote 桌面版静默打印的**不可逆外发操作**、且依赖环境状态，
+> 需逐本单独确认后再跑，不随「按流程处理」自动执行。
+
 ---
 
 ## 环境要求
@@ -113,6 +117,10 @@ uv sync
 3|1.1.1 细目|15
 ```
 
+> **清单 / 知识手册类书**（如《高中知识清单》）原始目录常有 4 级（册→章→节→知识/考点/专题）。
+> 约定映射为 **册=L1、章=L2、节(x.x)=L3**，**丢弃**最细的「知识N/考点N/专题N」**以及 x.x.x 小节**
+> （x.x.x 常与父 x.x 同页，按 L3 拆会切出空段）。即这类书最多取到 `x.x` 一级。详见 ARCHITECTURE.md。
+
 > 也可不用 skill 而手动驱动：先 `uv run toc-claude render "书名" --pages 2-4`，再自行让 Claude
 > 看 `books-work/{书名}/pages/*.png` 写出 `toc_parsed.txt`，最后 `uv run toc-claude bookmarks "书名" --offset 18`。
 
@@ -153,6 +161,11 @@ uv run toc-split "书名" --level 3 --max-pages 100
 在 `split_config.xlsx` 的 `max_pages_per_file` 列填入目标值（如 `20`）控制单 PDF 页数。
 文件夹按 `max_pages` **硬上限**以「文件」为单位贪心装满（只要 `max_pages_per_file ≤ max_pages` 就绝不超限），
 一章若被切成多份可能落到不同文件夹——优先保证分区大小，也使每个分区打印后的 `.one` 文件尽量小（避免同步超限）。
+
+> **拆分边界出错排查**：若相邻两个输出文件错位（前一个被截断、后一个头部混入上一节），**先别动 offset**——
+> offset 是全书一个的全局常量，只有两文件错位通常是 `toc_parsed.txt` 里**某节印刷页码识别错**。
+> 渲染源 PDF 边界附近页核对真实起始页，改对应行页码即可，并可只重切受影响的两个文件而不全量重跑。
+> 完整诊断与「只重切」做法见 ARCHITECTURE.md「拆分边界排查与只重切受影响文件」。
 
 ### Pipeline 2.5：OneNote 预建分区组 + 空分区（导入前准备）
 
