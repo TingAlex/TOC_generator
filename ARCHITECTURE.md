@@ -110,7 +110,12 @@ toc_parsed.txt → toc.load_file() → 按 level 过滤 → toc.check_nondecreas
 
 一行一本书，`registry.save()` 增量同步。字段 ←→ 列见 `registry._STATE_TO_COL`，
 主键统一为 `"{书名}.pdf"`。列：`书名 offset toc_pages split_level rendered
-toc_parsed bookmarks_added bookmark_count 拆分完成`。
+toc_parsed bookmarks_added bookmark_count 拆分完成 边界已判读 边界shared数`。
+
+**边界判读进度（跨机器防重复）**：`边界已判读`（bool）+ `边界shared数`（int）记录某书是否已跑过
+边界重叠判读。**`边界shared数=0` 也算已判读**（判过、无需重叠）——只看 `boundary_overlap.txt` 有没有内容
+会把这类书误判成没做过（它的 sidecar 只有注释行）。`books-work/` 不入 git 但在同步盘里，
+故该进度随书本数据一起到别的机器。
 
 ### 冷启动：Excel 缺失时自动建表
 

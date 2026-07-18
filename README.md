@@ -344,11 +344,16 @@ uv run toc-onenote-strip --section-group "书名" --sections "01,02" --write
 ## 进度管理（Excel）
 
 `books-work/books_config.xlsx` 是项目的统一监控面板（列：`书名` `offset` `toc_pages` `split_level`
-`rendered` `toc_parsed` `bookmarks_added` `bookmark_count` `拆分完成`）。
+`rendered` `toc_parsed` `bookmarks_added` `bookmark_count` `拆分完成` `边界已判读` `边界shared数`）。
 
 **重做某步**：在 Excel 中把对应列改为 `False`，下次运行自动从该步重做。例如：
 - 改 `toc_parsed.txt` 后重写书签 → `bookmarks_added` 改 False
 - 重新拆分 → `拆分完成` 改 False
+
+**跨电脑不重复劳动**：`books-work/` 不入 git，但和书本数据一起放在同步盘（本机在 OneDrive），
+所以 `books_config.xlsx` 与各书的 `boundary_overlap.txt` 会跟着同步到别的机器。判断某书**边界是否已判读**
+看 `边界已判读` 列（`边界shared数=0` 也算已判读，代表判过且无需重叠）——不要只看 sidecar 有没有内容，
+shared=0 的书 sidecar 只有注释行，容易误判为没做过。
 
 ---
 

@@ -19,6 +19,8 @@ _STATE_TO_COL = {
     "toc_parsed":      "toc_parsed",
     "bookmarks_added": "bookmarks_added",
     "bookmark_count":  "bookmark_count",
+    "boundary_checked": "边界已判读",
+    "boundary_shared":  "边界shared数",
 }
 
 
@@ -81,13 +83,14 @@ def _load_from_excel() -> dict:
             val = d.get(col_name)
             if val is None:
                 continue
-            if state_key in ("rendered", "toc_parsed", "bookmarks_added"):
+            if state_key in ("rendered", "toc_parsed", "bookmarks_added",
+                             "boundary_checked"):
                 if val:  # 只写 True；False/空 视为未完成
                     state[state_key] = bool(val)
             elif state_key == "offset":
                 state["offset"] = int(val)
-            elif state_key == "bookmark_count":
-                state["bookmark_count"] = int(val)
+            elif state_key in ("bookmark_count", "boundary_shared"):
+                state[state_key] = int(val)
             # toc_pages 已单独处理
 
         registry[key] = state

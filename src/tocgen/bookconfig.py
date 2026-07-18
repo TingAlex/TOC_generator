@@ -25,6 +25,8 @@ BOOKS_COLS = [
     ("bookmarks_added", "书签已写入PDF",                              False),
     ("bookmark_count", "书签数量",                                    0),
     ("拆分完成",        "PDF拆分已完成",                               False),
+    ("边界已判读",      "边界重叠已判读（toc-boundaries + boundary_overlap.txt）", False),
+    ("边界shared数",    "判读出的 shared 边界数（0 也算已判读）",         0),
 ]
 
 # split_config.xlsx 列定义：(列名, 说明, 默认值)
