@@ -106,7 +106,7 @@ def _save_to_excel(registry: dict) -> None:
 
     headers: dict[str, int] = {cell.value: cell.column for cell in ws[1] if cell.value}
     existing: dict[str, int] = {
-        str(row[0].value): row[0].row
+        paths.stem(str(row[0].value)): row[0].row
         for row in ws.iter_rows(min_row=3) if row[0].value
     }
 

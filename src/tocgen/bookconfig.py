@@ -16,7 +16,7 @@ SPLIT_CONFIG_PATH = paths.SPLIT_CONFIG_PATH
 
 # books_config.xlsx 列定义：(列名, 说明, 默认值)
 BOOKS_COLS = [
-    ("书名",            "PDF文件名（不含扩展名）",                      None),
+    ("书名",            "书的相对路径（不含扩展名），如 系列/册",         None),
     ("offset",         "印刷页码偏移量（PDF页 = 印刷页 + offset）",    0),
     ("toc_pages",      "目录所在页（逗号分隔）",                        ""),
     ("split_level",    "拆分层级（1/2/3）",                            3),
@@ -95,12 +95,12 @@ def init_books_config(pdf_names: list[str]) -> int:
     ws = wb.active
 
     existing_books = {
-        str(row[0]) for row in ws.iter_rows(min_row=3, values_only=True) if row[0]
+        paths.stem(str(row[0])) for row in ws.iter_rows(min_row=3, values_only=True) if row[0]
     }
 
     added = 0
     for name in pdf_names:
-        if name in existing_books:
+        if paths.stem(name) in existing_books:
             continue
         row_data = {col: default for col, _note, default in BOOKS_COLS}
         row_data["书名"] = name
@@ -139,23 +139,22 @@ def init_split_config() -> None:
 
 
 def run_init() -> None:
-    """toc-init 入口：扫描 books-todo/(与 books-done/) 登记新书，并建 split_config。"""
+    """toc-init 入口：递归扫描 books-todo/(与 books-done/) 登记新书，并建 split_config。"""
     paths.BOOKS_WORK.mkdir(exist_ok=True)
 
+    # 递归发现：书可嵌套在系列 / 教辅文件夹下，key 是相对目录根的路径（见 paths 模块）
     pdf_names: list[str] = []
     seen: set[str] = set()
     for src_dir in (paths.BOOKS_TODO, paths.BOOKS_DONE):
-        if src_dir.exists():
-            for f in sorted(src_dir.glob("*.pdf")):
-                if f.stem not in seen:
-                    seen.add(f.stem)
-                    pdf_names.append(f.stem)
+        for key in paths.iter_book_pdfs(src_dir):
+            if key not in seen:
+                seen.add(key)
+                pdf_names.append(key)
     # 已识别目录（有 toc_parsed.txt）但 PDF 不在 todo/done 的也收录
-    if paths.BOOKS_WORK.exists():
-        for d in sorted(paths.BOOKS_WORK.iterdir()):
-            if d.is_dir() and d.name not in seen and (d / "toc_parsed.txt").exists():
-                seen.add(d.name)
-                pdf_names.append(d.name)
+    for key in paths.iter_work_books():
+        if key not in seen:
+            seen.add(key)
+            pdf_names.append(key)
 
     print(f"发现 {len(pdf_names)} 本书：")
     for n in pdf_names:

@@ -28,6 +28,52 @@
 
 ---
 
+## 目录结构：书的身份 = 相对路径
+
+一份教辅可能含多本小册子（主书 + 答案册），一套系列又含多份教辅。故**书的主键不是文件名，
+而是它相对 `books-todo/` 的路径**（不含 `.pdf`，分隔符统一 `/`，见 `paths.stem()`）。
+
+`books-todo` / `books-work` / `books-done` 三棵树用同一条相对路径**互相镜像**：
+
+```
+books-todo/薛金星教材全解-人教B/必修第一册.pdf          源 PDF（原始版）
+books-work/薛金星教材全解-人教B/必修第一册/             中间产物（pages/ toc_parsed.txt …）
+books-done/薛金星教材全解-人教B/必修第一册.pdf          带书签成品
+books-done/薛金星教材全解-人教B/必修第一册_拆分/01/…    拆分输出
+```
+
+### 层级按需建，不强制深度
+
+| 情形 | 布局 | 例 |
+|------|------|-----|
+| 单本书 | 直接躺根上 | `名师大招册.pdf` |
+| 一套系列（多册，每册一本） | 系列/册 | `薛金星教材全解-人教B/必修第一册.pdf` |
+| 一份教辅含多本小册子 | 教辅/小册 | `Taxi/1/教师用书.pdf`、`Taxi/1/练习册.pdf` |
+| 系列 + 教辅 + 小册 | 三层 | `高中必刷题-人教B/必修4/主书.pdf` |
+
+**流水线的原子单位始终是一个 PDF**——主书与答案册是两本独立的书，各有自己的 offset、
+toc_parsed.txt、书签和拆分输出。文件夹只作组织层，拆分算法 / 边界判读 / TOC 解析对它无感知。
+
+### 相关 API（全在 `paths.py`）
+
+| 函数 | 用途 |
+|------|------|
+| `stem(book)` | 规整成主键：反斜杠→`/`、去 `.pdf`、去首尾 `/` |
+| `display_name(book)` | 路径各段用 `-` 连接，供 OneNote 分区组名（名字里不能有 `/`） |
+| `iter_book_pdfs(root)` | 递归发现源 PDF，**跳过 `_拆分/` 子树**（否则会把上千个拆分产物当成书） |
+| `iter_work_books()` / `iter_split_roots()` | 递归发现中间产物目录 / 拆分输出目录 |
+| `resolve_book(name)` | 命令行输入 → 唯一书 key；允许只写片段（`必修第四册`），歧义则列候选 |
+| `split_root_key(folder)` | `{书}_拆分/` 目录 → 书 key（`split_root` 的逆运算） |
+
+> **踩坑**：`books-done/` 下递归找 PDF 必须排除 `*_拆分/`，那里面是上千个章节产物而非书。
+> 建目录一律 `mkdir(parents=True)`——书含系列路径时中间层不存在。
+
+> **Windows 路径长度**：`MAX_PATH` 260。多一层文件夹会吃预算，但改用短册名（`必修第一册`
+> 而非 `中学教材全解 高中数学必修第一册`）后净效果是变短——迁移后最长 132 字符。
+> 新增系列时若册名很长，仍建议核一下拆分产物的最长路径。
+
+---
+
 ## 包结构与分层
 
 代码是一个可安装包 `src/tocgen/`，按**职责分层、依赖单向向下**（解耦 + 高内聚）：
@@ -109,8 +155,12 @@ toc_parsed.txt → toc.load_file() → 按 level 过滤 → toc.check_nondecreas
 ### 唯一存储：`books-work/books_config.xlsx`
 
 一行一本书，`registry.save()` 增量同步。字段 ←→ 列见 `registry._STATE_TO_COL`，
-主键统一为 `"{书名}.pdf"`。列：`书名 offset toc_pages split_level rendered
-toc_parsed bookmarks_added bookmark_count 拆分完成 边界已判读 边界shared数`。
+主键统一为 `"{书}.pdf"`，其中 `{书}` 是**相对路径**（如 `薛金星教材全解-人教B/必修第一册`，
+见上文「目录结构」）。读写两端都先过 `paths.stem()` 规整，故 Excel 里手填成
+`薛金星教材全解-人教B\必修第一册` 也能对上、不会多出一行。
+
+列：`书名 offset toc_pages split_level rendered toc_parsed bookmarks_added
+bookmark_count 拆分完成 边界已判读 边界shared数`。
 
 **边界判读进度（跨机器防重复）**：`边界已判读`（bool）+ `边界shared数`（int）记录某书是否已跑过
 边界重叠判读。**`边界shared数=0` 也算已判读**（判过、无需重叠）——只看 `boundary_overlap.txt` 有没有内容
@@ -200,7 +250,7 @@ for f in files:                       # 每个 f.pages ≤ max_pages_per_file
 
 **诊断**：用 `pymupdf` 渲染**源 PDF**（`books-todo/` 原始版；扫描件抽不了文字，只能渲染看图）边界附近
 几页，读页脚印刷页号核对每节真实起始页。
-> 实例（中学教材全解 高中数学必修第一册）：`toc_parsed.txt` 把「3.3 函数的应用」记成印刷 `181`，
+> 实例（`薛金星教材全解-人教B/必修第一册`）：`toc_parsed.txt` 把「3.3 函数的应用」记成印刷 `181`，
 > 实际是 `187`（3.2 一直延伸到 186）；3.2=173、3.4=193、本章整合=194 都正确，offset 全程=10 也没问题。
 > 改这一行页码即修复。
 

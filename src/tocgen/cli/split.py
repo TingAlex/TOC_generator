@@ -7,12 +7,15 @@
 import argparse
 import sys
 
+from .. import paths
 from ..split import run_split
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="按目录拆分 PDF（单本调试用）")
-    parser.add_argument("book_name", help="书名（与 books-work/ 子目录名一致）")
+    parser.add_argument("book_name",
+                        help="书名或书路径，如 薛金星教材全解-人教B/必修第一册；"
+                             "唯一命中时可只写片段（必修第一册）")
     parser.add_argument("--level", type=int, choices=[1, 2, 3], default=3,
                         help="拆分最大层级（默认 3，即全部）")
     parser.add_argument("--max-pages", type=int, default=100,
@@ -30,8 +33,9 @@ def main() -> None:
     args = parser.parse_args()
 
     try:
+        book = paths.resolve_book(args.book_name)
         run_split(
-            args.book_name,
+            book,
             level=args.level,
             max_pages=args.max_pages,
             max_pages_per_file=args.max_pages_per_file,
@@ -40,7 +44,7 @@ def main() -> None:
             folder_digits=args.folder_digits,
             offset=args.offset,
         )
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, LookupError) as e:
         sys.exit(f"错误：{e}")
 
 

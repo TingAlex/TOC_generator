@@ -16,7 +16,9 @@ from ..boundary import render_boundaries
 def main() -> None:
     parser = argparse.ArgumentParser(description="渲染拆分边界页顶部供判读（fresh/shared）")
     parser.add_argument("command", choices=["render"], help="render：渲染边界页 montage")
-    parser.add_argument("book_name", help="书名（与 books-work/ 子目录名一致；部分匹配亦可）")
+    parser.add_argument("book_name",
+                        help="书名或书路径，如 薛金星教材全解-人教B/必修第一册；"
+                             "唯一命中时可只写片段（必修第一册）")
     parser.add_argument("--level", type=int, choices=[1, 2, 3], default=3,
                         help="拆分最大层级（须与拆分时一致，默认 3）")
     parser.add_argument("--offset", type=int, default=None,
@@ -27,13 +29,18 @@ def main() -> None:
     parser.add_argument("--per-montage", type=int, default=6, help="每张 montage 的格子数（默认 6）")
     args = parser.parse_args()
 
+    try:
+        book = paths.resolve_book(args.book_name)
+    except LookupError as e:
+        sys.exit(f"错误：{e}")
+
     offset = args.offset
     if offset is None:
-        state = registry.load().get(paths.book_key(paths.stem(args.book_name)), {})
+        state = registry.load().get(paths.book_key(book), {})
         offset = state.get("offset", 0) or 0
 
     try:
-        render_boundaries(args.book_name, offset=offset, level=args.level,
+        render_boundaries(book, offset=offset, level=args.level,
                           top_frac=args.top_frac, cols=args.cols, per_montage=args.per_montage)
     except (FileNotFoundError, ValueError) as e:
         sys.exit(f"错误：{e}")

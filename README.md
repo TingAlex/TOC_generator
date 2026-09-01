@@ -15,8 +15,8 @@ books-todo/*.pdf
       ▼  /toc-by-claude（skill）+ uv run toc-claude   【Pipeline 1：书签（Claude 看图，零 API）】
       │
       ├─[1] toc-claude render：渲染目录页为图片 (300 DPI)
-      ├─[2] Claude 看图识别目录结构 → books-work/{书名}/toc_parsed.txt
-      └─[3] toc-claude bookmarks：写入 PDF 书签 → books-done/{书名}.pdf
+      ├─[2] Claude 看图识别目录结构 → books-work/{书}/toc_parsed.txt
+      └─[3] toc-claude bookmarks：写入 PDF 书签 → books-done/{书}.pdf
       │
       ▼  uv run toc-init                 【初始化配置 Excel】
       │
@@ -25,7 +25,7 @@ books-todo/*.pdf
       │
       ▼  uv run toc-split-all           【Pipeline 2：拆分】
       │
-      books-done/{书名}_拆分/
+      books-done/{书}_拆分/
           01/  001-第一章.pdf  002-第一节.pdf  ...
           02/  ...
       │
@@ -40,6 +40,34 @@ books-todo/*.pdf
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
+
+### 目录结构：一套系列 / 一份教辅多本小册子
+
+一份教辅常含多本小册子（主书 + 答案册），一套系列又含多份教辅。**书的名字就是它相对
+`books-todo/` 的路径**，三棵树按同一路径镜像；层级按需建，单本书仍直接躺在根上：
+
+```
+books-todo/
+├── 名师大招册.pdf                      单本，不建文件夹
+├── 薛金星教材全解-人教B/                 一套系列
+│   ├── 必修第一册.pdf … 必修第四册.pdf
+│   └── 选择性必修第一册.pdf … 选择性必修第三册.pdf
+├── Taxi/1/                            一份教辅两本小册子
+│   ├── 教师用书.pdf
+│   └── 练习册.pdf
+└── 高中必刷题-人教B/必修4/               系列 + 教辅 + 小册，三层
+    ├── 主书.pdf
+    └── 答案解析.pdf
+```
+
+对应地 `books-work/薛金星教材全解-人教B/必修第一册/`（中间产物）、
+`books-done/薛金星教材全解-人教B/必修第一册_拆分/`（拆分输出），Excel 的「书名」列填这条路径。
+
+命令行**不必打全路径**，唯一命中即可：`toc-split "必修第四册"`、`toc-split "主书"`；
+撞名时（人教A 和人教B 都有「必修第一册」）会列出候选，写 `"人教B/必修第一册"` 即可区分。
+
+> 主书与答案册是**两本独立的书**，各有自己的 offset、目录识别、书签和拆分输出——
+> 文件夹只是组织层，不改变流水线的处理单位。
 
 > **默认处理范围**：「把新书按流程处理一遍」默认只跑到 **Pipeline 2（拆分）** 为止。
 > OneNote 步骤（Pipeline 2.5 / 3 / 4）是开着 OneNote 桌面版静默打印的**不可逆外发操作**、且依赖环境状态，
@@ -145,8 +173,9 @@ uv run toc-split-all --dry-run        # 预览待处理书目
 uv run toc-split-all                  # 批量拆分所有未完成的书
 uv run toc-split-all --book "必修第四册"   # 只拆某一本（部分匹配）
 
-# 单本调试：
-uv run toc-split "书名" --level 3 --max-pages 100
+# 单本调试（书名可只写片段，唯一命中即可；撞名时会列出候选）：
+uv run toc-split "必修第四册" --level 3 --max-pages 100
+uv run toc-split "人教B/必修第一册" --level 3        # 人教A/人教B 同名册用路径区分
 ```
 
 | 参数（`toc-split`） | 默认 | 说明 |

@@ -73,8 +73,8 @@ def cmd_bookmarks(args: argparse.Namespace) -> None:
         sys.exit("未指定偏移量：请加 --offset N（PDF页码 = 印刷页码 + offset），"
                  "或先在 books_config.xlsx 的 offset 列填好。")
 
-    paths.BOOKS_DONE.mkdir(exist_ok=True)
-    out = paths.BOOKS_DONE / f"{book}.pdf"
+    out = paths.done_pdf(book)
+    out.parent.mkdir(parents=True, exist_ok=True)   # 书含系列路径时需建中间层
     count = write_bookmarks(str(pdf), entries, int(offset), str(out))
 
     state["offset"] = int(offset)

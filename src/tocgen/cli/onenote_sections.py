@@ -1,7 +1,10 @@
 """toc-onenote-sections —— Pipeline 2.5：按拆分文件夹数预建「分区组 + 空分区」。
 
-读 books-done/{书名}_拆分/ 下的 0N 文件夹数，在指定笔记本建一个以书名命名的
+读 books-done/{书}_拆分/ 下的 0N 文件夹数，在指定笔记本建一个以书名命名的
 分区组 + 同名空分区 01…0N，供 Pipeline 3 打印前准备。纯本地离线（COM）。
+
+书可嵌套在系列文件夹下（books-done/系列/册_拆分/），--book 递归匹配；分区组名取
+display_name（路径各段用 `-` 连接，如「薛金星教材全解-人教B-必修第一册」）。
 
     toc-onenote-sections --book "书名"            # dry-run
     toc-onenote-sections --book "书名" --write     # 正式创建（已有在线笔记本）
@@ -19,15 +22,20 @@ from ..onenote.common import DEFAULT_NOTEBOOK, section_folder_names
 
 
 def find_split_folder(root: Path, book: str) -> Path:
-    """在 root 下定位 {书名}_拆分 文件夹，支持部分匹配。多于一个则报错列出。"""
+    """在 root 下**递归**定位 {书}_拆分 文件夹，支持部分匹配。多于一个则报错列出。
+
+    书可嵌套在系列 / 教辅文件夹下，故匹配的是书 key（相对路径，如
+    `薛金星教材全解-人教B/必修第一册`）；`--book 必修第一册` 这类子串照旧能命中。
+    """
     if not root.is_dir():
         sys.exit(f"找不到拆分根目录：{root}")
-    candidates = [d for d in root.iterdir()
-                  if d.is_dir() and d.name.endswith(paths.SPLIT_SUFFIX) and book in d.name]
+    needle = paths.stem(book)
+    candidates = [d for d in paths.iter_split_roots(root)
+                  if needle in paths.split_root_key(d, root)]
     if not candidates:
         sys.exit(f"在 {root} 下找不到匹配「{book}」的 *_拆分 文件夹。")
     if len(candidates) > 1:
-        names = "\n".join(f"  · {d.name}" for d in candidates)
+        names = "\n".join(f"  · {paths.split_root_key(d, root)}" for d in candidates)
         sys.exit(f"「{book}」匹配到多个文件夹，请把 --book 写得更具体：\n{names}")
     return candidates[0]
 
@@ -44,7 +52,8 @@ def pick_ref_online_notebook(notebooks: list[Notebook],
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--book", required=True, help="书名，定位 books-done/{书名}_拆分/（部分匹配）")
+    parser.add_argument("--book", required=True,
+                        help="书名或书路径，递归定位 books-done/{书}_拆分/（部分匹配）")
     parser.add_argument("--notebook", default=DEFAULT_NOTEBOOK, help="目标笔记本名")
     parser.add_argument("--new-notebook", action="store_true",
                         help="笔记本不存在时新建在线笔记本（同级于现有在线笔记本）")
@@ -61,14 +70,15 @@ def main() -> None:
         sys.exit("✗ --local-path 与 --new-notebook 互斥，请只选其一。")
 
     folder = find_split_folder(args.root, args.book)
-    book = folder.name[:-len(paths.SPLIT_SUFFIX)]
+    # 分区组名不能含 `/`，故用 display_name 把路径各段连成一个名字
+    book = paths.display_name(paths.split_root_key(folder, args.root))
     secs = section_folder_names(folder)
     if not secs:
         sys.exit(f"文件夹 {folder} 下没有任何 0N 数字子文件夹，无分区可建。")
 
     nb_display = args.local_path or args.notebook
     mode = "写入" if args.write else "dry-run（不创建）"
-    print(f"拆分文件夹：{folder.name}")
+    print(f"拆分文件夹：{paths.split_root_key(folder, args.root)}{paths.SPLIT_SUFFIX}")
     print(f"书名（分区组名）：{book}")
     print(f"待建分区（{len(secs)} 个）：{', '.join(secs)}")
     print(f"目标笔记本：{nb_display}　模式：{mode}\n")
