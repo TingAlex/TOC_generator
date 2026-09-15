@@ -1,13 +1,13 @@
 [project]
 name = "pdf-toc"
-version = "1.1.0"
-description = "PDF 目录识别 + 书签 + 按章节拆分 + 打印导入 OneNote + 本地整理"
+version = "1.2.0"
+description = "PDF 目录识别 + 书签 + 按章节拆分 + OneNote 打印导入、整理与线性同步"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "openpyxl>=3.1.5",
     "pymupdf>=1.27.2.3",
-    # Pipeline 2.5/3/4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）
+    # Pipeline 2.5/3/4/5：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）
     "comtypes>=1.4.16; sys_platform == 'win32'",
 ]
 
@@ -25,6 +25,7 @@ toc-onenote-import    = "tocgen.cli.onenote_import:main"   # Pipeline 3 打印 P
 toc-onenote-fix       = "tocgen.cli.onenote_fix:main"      # 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据）
 toc-onenote-titles    = "tocgen.cli.onenote_titles:main"  # Pipeline 4 核对标题/删占位/去重
 toc-onenote-strip     = "tocgen.cli.onenote_strip:main"   # Pipeline 4 删误插入附件
+toc-onenote-copy-online = "tocgen.cli.onenote_copy_online:main" # Pipeline 5 本地页逐页同步校验后复制到 OneDrive
 
 [build-system]
 requires = ["hatchling"]

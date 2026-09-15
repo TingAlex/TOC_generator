@@ -23,6 +23,10 @@
 ┌───────────────────────────▼──────────────────────────────────┐
 │  Pipeline 4：OneNote 本地整理（toc-onenote-titles / -strip）       │
 │    本地 COM 读分区/页 → 删占位页 · 去重 · 按文件名核对改标题         │
+└───────────────────────────┬──────────────────────────────────┘
+┌───────────────────────────▼──────────────────────────────────┐
+│  Pipeline 5：本地页逐页复制到 OneDrive（toc-onenote-copy-online） │
+│    复制一页 → 同步/等待/再同步 → 哈希与版面复读通过 → 下一页         │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -81,7 +85,7 @@ toc_parsed.txt、书签和拆分输出。文件夹只作组织层，拆分算法
 ```
 cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
   │  调用
-编排层：split（按目录拆分）、onenote/*（建分区/改标题/删附件）
+编排层：split（按目录拆分）、onenote/*（建分区/改标题/线性复制同步）
   │  调用
 领域库：toc（目录模型）、pdf（渲染/书签）、onenote/client（COM）
   │  调用
@@ -92,7 +96,8 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 > `cli/claude_toc.py` 只负责「渲染目录页」「写书签」两个纯本地步骤，直接调 `pdf` + `toc`。
 
 > 关键解耦点：`cli` 不写业务逻辑；所有路径常量只在 `paths` 一处定义；`level|title|page`
-> 的读取/序列化/校验只在 `toc` 一处实现；三个 OneNote CLI 的共享件集中在 `onenote/common`。
+> 的读取/序列化/校验只在 `toc` 一处实现；OneNote CLI 的共享件集中在 `onenote/common`，
+> 跨笔记本页面复制与验证集中在 `onenote/copy`。
 
 ### 模块职责
 
@@ -105,13 +110,14 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 | `bookconfig.py` | 两张 Excel 的模板、创建、读取（`books_config` + `split_config`）；`run_init` 为 `toc-init` 入口 |
 | `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset）；`load_boundary_overlap` 读边界重叠 sidecar |
 | `boundary.py` | 拆分边界分析：`compute_boundaries`（找相邻两节的边界）+ 渲染边界页顶部裁剪 + 拼 montage（仅 pymupdf），供 Claude 看图判读 fresh/shared |
-| `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、改/删页、列/删附件、`set_printout_section`（打印定向）、`list_section_pages`（轮询） |
+| `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、创建/读写页 XML、显式同步、改/删页、打印定向与页轮询 |
 | `onenote/common.py` | 四个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
+| `onenote/copy.py` | 本地打印页 → 在线页：安全 XML 重建、图片摘要/版面核验、单页同步屏障、失败回滚与前缀续跑 |
 | `onenote/printer.py` | 打印后端：定位 SumatraPDF + `print_pdf`（静默打印到 OneNote 桌面打印机） |
 | `onenote/fix.py` | 修复 OneNote「正在清理…」卡死：`fix_relaunch`（杀进程+重启+等就绪，**不删任何文件**） |
 | `cli/claude_toc.py` | `toc-claude`：Pipeline 1 的两个纯本地步骤——`render`（渲染目录页）与 `bookmarks`（由 toc_parsed.txt 写书签）；中间看图识别由 Claude 完成 |
 | `cli/boundaries.py` | `toc-boundaries render`：渲染拆分边界页顶部 montage，供 Claude 判读 fresh/shared（边界重叠用） |
-| `cli/*.py` | 10 个 `toc-*` 命令入口（见 README 命令速查），各暴露 `main()` |
+| `cli/*.py` | `toc-*` 命令入口（见 README 命令速查），各暴露 `main()`；`onenote_copy_online.py` 是 Pipeline 5 薄入口 |
 
 ---
 
@@ -315,10 +321,10 @@ Pipeline 3 打印前的准备步。**纯本地离线**（COM），按 `books-don
 的每页 PDF 以高分辨率图片存储，100 页打印输出的 `.one` 文件可达 150~300MB，超限后 SharePoint
 拒绝同步，OneNote 报错并中断打印流程。
 
-**解决方案：先打印到本地笔记本，全部完成后整体移入在线笔记本。**
+**解决方案：先打印到本地笔记本，全部完成后逐页线性复制到在线笔记本。**
 
-打印期间在本地操作，不触发 SharePoint 限制；打印完成后在 OneNote UI 中把**整个分区组**拖入
-在线笔记本，OneNote 自行分批同步，不再触发 100MB 单文件报错。
+打印期间在本地操作，不触发 SharePoint 限制；Pipeline 2 用 `max_pages` 把每个目标分区控制在容量
+预算内。打印完成后逐页写入在线笔记本，每页同步并复读确认后才继续，避免批量拖动与并发同步冲突。
 
 ```
 # 1. 建本地笔记本 + 分区组 + 空分区
@@ -332,8 +338,9 @@ toc-onenote-import --notebook "书名_本地" --section-group "书名" --section
 toc-onenote-titles --notebook "书名_本地" --section-group "书名" --section-prefix= \
     --root books-done/书名_拆分 --delete-placeholders --write
 
-# 4. 在 OneNote UI 中：把分区组整体拖入目标在线笔记本（如「薛金星教材全解-人教B」）
-#    OneNote 自行处理同步，不再报 SharePoint 100MB 错误
+# 4. 完整预检后，线性复制到同名在线笔记本
+toc-onenote-copy-online --source-notebook "书名_本地" --source-section-group "书名" \
+    --target-notebook "书名" --create-target --write
 ```
 
 ### COM 接入要点（创建相关）
@@ -448,6 +455,60 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 | 删除安全性 | `deletePermanently=False` → 进 OneNote 回收站，可恢复 |
 | 改标题不伤正文 | `UpdatePageContent` 只提交含 `ID` 与 `Title` 的最小 Page XML |
 
+---
+
+## Pipeline 5：本地打印页逐页复制到 OneDrive
+
+`toc-onenote-copy-online` 解决“本地笔记本负责稳定接收打印，在线笔记本负责同步归档”之间的搬运。
+源、目标可以同名：`Notebook.path` 非 HTTP(S) 的唯一同名本是源，`path` 为 `https://…` 的唯一同名本
+是目标。源取指定分区组的直属分区（或笔记本根直属分区），目标始终使用在线笔记本根下的同名直属分区。
+
+### 为什么不能原样提交源页 XML
+
+`GetPageContent(pageId, piAll=7, xs2013=2)` 返回的打印页除内嵌 `Image/Data` 外，还包含只在源本地
+笔记本存在的 `XPSFile`、`CallbackID`、`objectID`、`QuickStyleDef` 等引用。把整棵 XML 换一个 Page ID 后提交到另一个
+笔记本，会得到 `0x80042014 (hrObjectDoesNotExist)`。`prepare_printout_page_xml` 因而只重建：
+
+- `PageSettings`
+- `Title`
+- 全部 `Image`（包含 Base64 `Data`、`Position`、`Size` 和格式）
+
+并递归移除 `objectID`、创建/修改者与时间、`xpsFileIndex`、`originalPageNumber`、`isPrintOut`，以及
+OE 的 `quickStyleIndex`。若源页根下出现 Outline、手写或其它未支持对象，预检直接中止；不能以“复制成功”
+为理由静默丢内容。本能力的明确输入域是 Pipeline 3 生成的 **PDF 打印输出页**。
+
+### 单页同步屏障
+
+```
+for 目标分区（按源层级顺序）:
+    验证目标已有页 == 源页的内容前缀
+    for 源页 in 尚未复制的后缀:
+        destination = CreateNewPage(target_section)
+        等 destination 在 GetHierarchy 中可见且 GetPageContent 可读
+        UpdatePageContent(过滤后的自包含 XML)
+        SyncHierarchy(destination)
+        SyncHierarchy(target_notebook)
+        wait(sync_settle=8s)
+        SyncHierarchy(target_notebook)
+        复读 destination，验证标题 + 每张图片摘要/版面
+        # 只有验证通过才进入下一页
+```
+
+图片摘要为 `SHA-256(decoded Base64) + format + x/y/width/height`；坐标与尺寸允许 `0.05` 绝对误差，
+只容忍 OneNote 对浮点字符串的归一化，不容忍图片内容变化。`SyncHierarchy` 返回、稳定等待、再次同步和
+复读是桌面 COM 能提供的最强串行确认边界；它不提供“某台远端设备已下载”的服务器回执。
+
+### 预检、续跑与失败边界
+
+- 默认 dry-run，但不是只列名称：它用 `piAll` 扫描全部源页并建立小型图片摘要，确保整批可无损复制。
+- 目标已有页数不得超过源；每一页的标题、图片数量/顺序、二进制和版面都必须等于源的同位置页。
+  满足时它是可续跑前缀，从下一页继续；任一不符都在写入前中止。
+- 新建分区的安全空白占位页可移入回收站；不会清空或覆盖其它目标页。
+- 单页失败时仅 `DeleteHierarchy(本次新页, 0.0, False)`，同步这一删除并中止。此前通过校验的页保留，
+  下次运行从已验证前缀续跑。
+- 目标缺失时只有显式 `--create-target` 才创建在线笔记本/缺失分区；新笔记本用某个现有在线本的 URL
+  父目录调用 `OpenHierarchy(newUrl, "", cftNotebook)`，不把本地路径误当在线位置。
+
 ### OneNote 开发环境须知（换机器开发必读）
 
 - **数据目录与代码解耦**：`books-todo/ books-done/ books-work/` 默认相对**当前工作目录**解析
@@ -484,7 +545,7 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 |----|------|
 | `pymupdf` | PDF 渲染、书签写入、页面提取与切片 |
 | `openpyxl` | 读写 Excel 配置 |
-| `comtypes` | Pipeline 2.5 / 3 / 4：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
+| `comtypes` | Pipeline 2.5 / 3 / 4 / 5：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
 | **SumatraPDF**（外部 exe，非 Python 包） | Pipeline 3 打印后端：`-print-to "OneNote (Desktop)" -silent` 静默打印。经 `subprocess` 调用，不入 `dependencies` |
 
 构建：`hatchling`（`[build-system]`），打包 `src/tocgen`，console_scripts 见 `pyproject.toml [project.scripts]`。

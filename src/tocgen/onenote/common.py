@@ -1,5 +1,5 @@
 """
-三个 OneNote CLI（建分区、改标题、删附件）共享的小工具。
+多个 OneNote CLI（建分区、打印、改标题、删附件等）共享的小工具。
 
 此前 DEFAULT_NOTEBOOK、分区编号解析、`--section-group` 范围限定逻辑在多个脚本里
 各写一份；这里收敛为一处。

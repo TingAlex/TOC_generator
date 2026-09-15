@@ -1,5 +1,5 @@
 """
-tocgen —— PDF 目录识别 · 书签 · 按章节拆分 · OneNote 本地整理。
+tocgen —— PDF 目录识别 · 书签 · 按章节拆分 · OneNote 本地整理与线性同步。
 
 分层（解耦 + 聚类）：
   · 基础设施：paths（路径）、registry（每书状态 Excel）、bookconfig（Excel 模板/读写）
@@ -14,4 +14,4 @@ Claude 看图写出 toc_parsed.txt，toc-claude 再写书签——全程不调�
 因此所有 `toc-*` 命令都应在项目根目录下运行。
 """
 
-__version__ = "1.0.0"
+__version__ = "1.2.0"

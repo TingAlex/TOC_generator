@@ -1,4 +1,4 @@
-# PDF 自动识别目录 · 添加书签 · 按章节拆分 · OneNote 整理
+# PDF 自动识别目录 · 添加书签 · 按章节拆分 · OneNote 整理与线性同步
 
 将 PDF 中的目录页交给 **Claude 自身的多模态能力**看图识别，自动生成 PDF 书签（大纲），再按目录层级把整本 PDF 拆分成独立章节文件，并提供把成果导入 OneNote 的本地整理工具。适用于扫描版教材、无书签的电子书等场景。**目录识别全程不调用任何外部 AI / OCR API。**
 
@@ -37,6 +37,9 @@ books-todo/*.pdf
       │
       ▼  uv run toc-onenote-titles      【Pipeline 4：OneNote 本地整理】
          核对/改标题 · 删占位页 · 去重（toc-onenote-strip：删误插入附件）
+      │
+      ▼  uv run toc-onenote-copy-online 【Pipeline 5：逐页复制到 OneDrive】
+         一页复制、同步、稳定等待、复读校验完成后，才处理下一页；支持安全续跑
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
@@ -70,7 +73,7 @@ books-todo/
 > 文件夹只是组织层，不改变流水线的处理单位。
 
 > **默认处理范围**：「把新书按流程处理一遍」默认只跑到 **Pipeline 2（拆分）** 为止。
-> OneNote 步骤（Pipeline 2.5 / 3 / 4）是开着 OneNote 桌面版静默打印的**不可逆外发操作**、且依赖环境状态，
+> OneNote 步骤（Pipeline 2.5 / 3 / 4 / 5）会改动 OneNote、且依赖桌面版及同步状态，
 > 需逐本单独确认后再跑，不随「按流程处理」自动执行。
 
 ---
@@ -80,7 +83,7 @@ books-todo/
 - **Python 3.14+**（建议通过 `uv` 自动管理）
 - **uv**（Python 包管理器）
 - **Claude Code**（Pipeline 1 的目录识别由 Claude 看图完成，通过 `/toc-by-claude` skill 驱动；**无需任何 AI / OCR API Key**）
-- **（仅 Pipeline 2.5 / 3 / 4 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）
+- **（仅 Pipeline 2.5 / 3 / 4 / 5 需要）** Windows + OneNote 桌面版（Office16，非 UWP 版）
 - **（仅 Pipeline 3 需要）** [SumatraPDF](https://www.sumatrapdfreader.org/download-free-pdf-viewer)（静默打印 PDF 到 OneNote 打印机）
 
 ---
@@ -118,6 +121,7 @@ uv sync
 | `toc-onenote-fix` | 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据） |
 | `toc-onenote-titles` | Pipeline 4 核对标题 + 删占位页 + 去重 |
 | `toc-onenote-strip` | 遗留工具：删除误插入的 PDF 附件（当前打印流程不产生此问题） |
+| `toc-onenote-copy-online` | Pipeline 5 把本地打印页逐页复制到同名/指定 OneDrive 笔记本，每页同步并复读校验后再继续 |
 
 每个命令都支持 `--help`。
 
@@ -251,7 +255,7 @@ uv run toc-onenote-sections --book "书名" --notebook "新本子" --new-noteboo
 
 > **安全**：默认 dry-run；创建为纯增量（只新增空分区组/空分区）；同名分区组**中止并报警**。
 >
-> **SharePoint 100MB 限制**：在线（OneDrive/SharePoint）笔记本的 `.one` 分区文件有 100MB 同步上限，打印大量 PDF 后极易超限报错。推荐先用 `--local-path` 建本地笔记本接收打印，打印完成后在 OneNote UI 中把整个分区组拖入目标在线笔记本（移动操作不触发该限制）。
+> **SharePoint 100MB 限制**：在线（OneDrive/SharePoint）笔记本的 `.one` 分区文件有 100MB 同步上限，打印大量 PDF 后极易超限报错。推荐先用 `--local-path` 建本地笔记本接收打印，并让 Pipeline 2 的 `max_pages` 把每个分区控制在容量上限内；打印和整理完成后，用 Pipeline 5 逐页复制、逐页同步到独立在线笔记本。
 
 ### Pipeline 3：打印 PDF 进分区（toc-onenote-import）
 
@@ -287,7 +291,7 @@ uv run toc-onenote-import --list --notebook "书名_本地" --section-group "书
 > **前提**：先用 `toc-onenote-sections` 建好 `01…0N` 空分区，且目标笔记本已在 OneNote 桌面版里打开。
 > 打印路径**不嵌源文件附件**（无需 `toc-onenote-strip`）。打印后用 `toc-onenote-titles --delete-placeholders --write` 改标题、删占位页。
 > 首跑若 OneNote 仍弹「选择打印输出位置」框，去 OneNote 选项关掉「总是询问打印输出的发送位置」。
-> 打印完成后，在 OneNote UI 中把整个分区组拖入目标在线笔记本即可完成归档（不触发 SharePoint 限制）。
+> 打印完成并整理好标题后，用 `toc-onenote-copy-online` 逐页复制到在线笔记本；不要同时手工拖动同一批页面。
 
 #### 修复 OneNote「正在清理上次打开之后的内容」卡死（toc-onenote-fix）
 
@@ -329,6 +333,61 @@ uv run toc-onenote-titles --section-group "书名" --section-prefix= --root book
 | `--write` | 真正写入（默认 dry-run） |
 
 > **安全**：所有删除进 OneNote **回收站**（可恢复）；标题改动可手动撤销。务必先看 dry-run。
+
+### Pipeline 5：本地页逐页线性复制到 OneDrive
+
+适用于“先把 PDF 打进本地笔记本，确认完整后再归档到云端”的流程。源、目标允许使用同一个
+显示名称：命令通过层级 `path` 自动区分本地笔记本与 `https://…` 在线笔记本。源分区组中的
+`01…0N` 会映射为目标在线笔记本根下的同名直属分区。
+
+```powershell
+$env:PYTHONUTF8=1
+
+# 1. 完整只读预检：检查全部源页、在线结构与可续跑前缀，不作改动
+uv run toc-onenote-copy-online `
+  --source-notebook "书名" `
+  --source-section-group "书名"
+# 如果在线目标尚不存在，dry-run 时也加 --create-target（仍然不会创建）
+
+# 2. 创建同名在线笔记本/缺失分区，并严格逐页复制
+uv run toc-onenote-copy-online `
+  --source-notebook "书名" `
+  --source-section-group "书名" `
+  --create-target --write
+
+# 目标要用另一个名字时
+uv run toc-onenote-copy-online `
+  --source-notebook "书名_本地" `
+  --source-section-group "书名" `
+  --target-notebook "书名" `
+  --create-target --write
+```
+
+| 参数 | 说明 |
+|------|------|
+| `--source-notebook` | 源**本地**笔记本名（必填） |
+| `--source-section-group` | 源分区组；省略时只取源笔记本根下的直属分区 |
+| `--target-notebook` | 目标**在线**笔记本名；默认与源同名 |
+| `--create-target` | 目标在线本不存在时创建，并补齐缺失的直属同名分区 |
+| `--ref-notebook` | 创建在线本时用于确定 OneDrive 同级父目录的现有在线本；缺省取第一个 |
+| `--sync-settle` | 每页首次同步后的稳定等待秒数（默认 `8`） |
+| `--ready-timeout` | 新页可读及复读校验超时（默认 `30` 秒） |
+| `--write` | 真正创建/复制；缺省为完整只读 dry-run |
+
+每页是一个不可交错的事务式步骤：
+
+1. `CreateNewPage` 新建目标页，并等待该页在层级中可见、可读。
+2. 从源页 `GetPageContent(piAll)` 取出内嵌图片，只重建 `PageSettings`、`Title`、`Image`；剥离只在源本地笔记本有效的 `XPSFile`、`CallbackID`、`objectID` 与页面样式索引等引用。
+3. 写入后依次同步目标页和目标笔记本，等待 `--sync-settle`，再次同步。
+4. 复读目标页，逐张比对图片 SHA-256、格式、位置/尺寸，并核对标题；全部通过才进入下一页。
+
+安全与续跑约束：
+
+- 开始写入前扫描**所有源页**。若页内含批注、手写、Outline 等当前不会复制的对象，整批中止，避免静默丢内容。
+- 已有目标页必须逐页与源页构成“标题 + 图片内容 + 版面”完全一致的前缀；否则中止，不猜测、不覆盖。
+- 中断后原命令重跑即可从已核验前缀的下一页继续。目标分区开头若只有安全判定出的空白占位页，会先移入回收站。
+- 单页写入或校验失败时，只把**本次新建页**移入 OneNote 回收站并立即停止；不会删除既有已同步页。
+- `SyncHierarchy` 返回和二次复读是桌面 COM 可获得的确认边界；执行期间不要在另一台设备或 OneNote UI 同时编辑/拖动目标页。
 
 ### 重打印前清空分区（toc-onenote-clear）
 
@@ -402,14 +461,16 @@ shared=0 的书 sidecar 只有注释行，容易误判为没做过。
 │   ├── split.py             # 按目录拆分编排（run_split，含边界重叠 overlap）
 │   ├── boundary.py          # 拆分边界分析：渲染边界页顶部 montage 供判读 fresh/shared
 │   ├── onenote/
-│   │   ├── client.py        # OneNote 桌面 COM 薄封装（含打印定向/分区页轮询）
+│   │   ├── client.py        # OneNote 桌面 COM 薄封装（打印定向/页 XML/显式同步）
 │   │   ├── common.py        # OneNote CLI 共享：默认笔记本/编号解析/排序/范围限定
+│   │   ├── copy.py          # 本地打印页 → OneDrive：过滤 XML、线性同步、哈希校验、续跑
 │   │   ├── printer.py       # 打印后端：SumatraPDF 静默打印到 OneNote 打印机
 │   │   └── fix.py           # 修复「正在清理…」卡死：杀进程+重启+等就绪（不删数据）
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令
 │       ├── claude_toc.py  init.py
 │       ├── split.py  split_all.py  boundaries.py
-│       └── onenote_sections.py  onenote_clear.py  onenote_import.py  onenote_fix.py  onenote_titles.py  onenote_strip.py
+│       └── onenote_sections.py  onenote_clear.py  onenote_import.py  onenote_fix.py
+│           onenote_titles.py  onenote_strip.py  onenote_copy_online.py
 │
 ├── books-todo/   # 放入待处理 PDF（不入库）
 ├── books-done/   # 成品 PDF + {书名}_拆分/ 拆分输出（不入库）

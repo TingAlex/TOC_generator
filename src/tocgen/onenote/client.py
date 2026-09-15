@@ -8,6 +8,7 @@ OneNote 桌面版本地 COM 接口薄封装。
 
 主要能力：
   - 读取 笔记本 → 分区 → 页 的层级（页按 OneNote 显示顺序）
+  - 读/写单页 XML、创建页与显式同步
   - 读/写单页标题
   - 删除页（送 OneNote 回收站，可恢复）
 """
@@ -33,6 +34,10 @@ HS_PAGES = 4
 
 # PageInfo 枚举
 PI_BASIC = 0
+PI_ALL = 7
+
+# NewPageStyle 枚举
+NPS_DEFAULT = 0
 
 # XMLSchema 枚举
 XS_2013 = 2
@@ -88,6 +93,8 @@ class Notebook:
     id: str
     name: str
     path: str = ""  # 笔记本位置：在线（OneDrive）笔记本以 https:// 开头，本地笔记本是磁盘路径
+    # direct_sections：笔记本根下的直属分区；复制到独立在线笔记本时需要保留这层作用域。
+    direct_sections: list[Section] = field(default_factory=list)
     # sections：扁平递归列表，含直属分区 + 各分区组内所有分区（向后兼容，按名查找用）
     sections: list[Section] = field(default_factory=list)
     section_groups: list[SectionGroup] = field(default_factory=list)  # 直属分区组（嵌套树）
@@ -122,6 +129,7 @@ class OneNoteClient:
                           path=nb_el.get("path", ""))
             # 嵌套树（直属分区 + 直属分区组，分区组内再递归）
             direct, nb.section_groups = self._parse_container(nb_el)
+            nb.direct_sections = direct
             # 扁平递归列表：直属 + 各组内所有分区（向后兼容）
             nb.sections = direct + _flatten_groups(nb.section_groups)
             notebooks.append(nb)
@@ -172,6 +180,23 @@ class OneNoteClient:
         xml = self._app.GetHierarchy(section_id, HS_PAGES, XS_2013)
         sec_el = ET.fromstring(xml)
         return self._parse_section(sec_el).pages
+
+    # ── 单页 XML / 同步（本地 → OneDrive 逐页复制）─────────────────────
+    def create_new_page(self, section_id: str, style: int = NPS_DEFAULT) -> str:
+        """在分区末尾新建页，返回页 ID。"""
+        return self._app.CreateNewPage(section_id, style)
+
+    def get_page_content(self, page_id: str, page_info: int = PI_BASIC) -> str:
+        """读取单页 OneNote 2013 XML；复制打印页时用 ``PI_ALL`` 取得内嵌图片数据。"""
+        return self._app.GetPageContent(page_id, page_info, XS_2013)
+
+    def update_page_content(self, page_xml: str) -> None:
+        """提交单页 XML；DATE 显式传 0.0，避免 comtypes 签名转换问题。"""
+        self._app.UpdatePageContent(page_xml, 0.0, XS_2013, True)
+
+    def sync_hierarchy(self, object_id: str) -> None:
+        """让 OneNote 同步指定页/笔记本；方法返回后同步调用已完成。"""
+        self._app.SyncHierarchy(object_id)
 
     # ── 打印导入：把打印输出定向到指定分区 ──────────────────────────────
     def set_printout_section(self, section_id: str) -> None:
