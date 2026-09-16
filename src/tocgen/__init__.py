@@ -14,4 +14,4 @@ Claude 看图写出 toc_parsed.txt，toc-claude 再写书签——全程不调�
 因此所有 `toc-*` 命令都应在项目根目录下运行。
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"

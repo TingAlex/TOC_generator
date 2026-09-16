@@ -38,8 +38,8 @@ books-todo/*.pdf
       ▼  uv run toc-onenote-titles      【Pipeline 4：OneNote 本地整理】
          核对/改标题 · 删占位页 · 去重（toc-onenote-strip：删误插入附件）
       │
-      ▼  uv run toc-onenote-copy-online 【Pipeline 5：逐页复制到 OneDrive】
-         一页复制、同步、稳定等待、复读校验完成后，才处理下一页；支持安全续跑
+      ▼  uv run toc-onenote-copy-online 【Pipeline 5：OneNote 原生整页复制到 OneDrive】
+         原生“移动或复制页”保留 XPS · 同步/复读完成后才处理下一页 · 支持安全续跑
 ```
 
 所有进度和配置统一由 `books-work/books_config.xlsx` 管理，可直接用 Excel 查看和修改。
@@ -121,7 +121,7 @@ uv sync
 | `toc-onenote-fix` | 修复 OneNote「正在清理…」卡死（杀进程+重启，不删数据） |
 | `toc-onenote-titles` | Pipeline 4 核对标题 + 删占位页 + 去重 |
 | `toc-onenote-strip` | 遗留工具：删除误插入的 PDF 附件（当前打印流程不产生此问题） |
-| `toc-onenote-copy-online` | Pipeline 5 把本地打印页逐页复制到同名/指定 OneDrive 笔记本，每页同步并复读校验后再继续 |
+| `toc-onenote-copy-online` | Pipeline 5 调用 OneNote 原生“移动或复制页”，把本地打印页完整复制到 OneDrive，保留 XPS 缩放重绘能力 |
 
 每个命令都支持 `--help`。
 
@@ -334,7 +334,7 @@ uv run toc-onenote-titles --section-group "书名" --section-prefix= --root book
 
 > **安全**：所有删除进 OneNote **回收站**（可恢复）；标题改动可手动撤销。务必先看 dry-run。
 
-### Pipeline 5：本地页逐页线性复制到 OneDrive
+### Pipeline 5：OneNote 原生整页线性复制到 OneDrive
 
 适用于“先把 PDF 打进本地笔记本，确认完整后再归档到云端”的流程。源、目标允许使用同一个
 显示名称：命令通过层级 `path` 自动区分本地笔记本与 `https://…` 在线笔记本。源分区组中的
@@ -371,23 +371,30 @@ uv run toc-onenote-copy-online `
 | `--create-target` | 目标在线本不存在时创建，并补齐缺失的直属同名分区 |
 | `--ref-notebook` | 创建在线本时用于确定 OneDrive 同级父目录的现有在线本；缺省取第一个 |
 | `--sync-settle` | 每页首次同步后的稳定等待秒数（默认 `8`） |
-| `--ready-timeout` | 新页可读及复读校验超时（默认 `30` 秒） |
+| `--ready-timeout` | 原生复制、新页落地及复读校验超时（默认 `90` 秒） |
 | `--write` | 真正创建/复制；缺省为完整只读 dry-run |
 
-每页是一个不可交错的事务式步骤：
+每页是一个不可交错的原生复制步骤：
 
-1. `CreateNewPage` 新建目标页，并等待该页在层级中可见、可读。
-2. 从源页 `GetPageContent(piAll)` 取出内嵌图片，只重建 `PageSettings`、`Title`、`Image`；剥离只在源本地笔记本有效的 `XPSFile`、`CallbackID`、`objectID` 与页面样式索引等引用。
-3. 写入后依次同步目标页和目标笔记本，等待 `--sync-settle`，再次同步。
-4. 复读目标页，逐张比对图片 SHA-256、格式、位置/尺寸，并核对标题；全部通过才进入下一页。
+1. COM `NavigateTo` 精确打开源页。
+2. 触发 OneNote 自身的 `Ctrl+Alt+M`“移动或复制页”对话框，按“在线笔记本名 + 直属分区名”精确选择目标并点击**复制**。
+3. 等 OneNote 自己生成目标页；代码绝不调用 `UpdatePageContent` 重建正文。
+4. 只读复查目标页必须同时保留 `XPSFile + CallbackID`，并逐张比对预览图片 SHA-256、格式、位置/尺寸及标题。
+5. 同步目标页和目标笔记本，等待 `--sync-settle`，再次同步/复读；全部通过才进入下一页。
 
 安全与续跑约束：
 
-- 开始写入前扫描**所有源页**。若页内含批注、手写、Outline 等当前不会复制的对象，整批中止，避免静默丢内容。
-- 已有目标页必须逐页与源页构成“标题 + 图片内容 + 版面”完全一致的前缀；否则中止，不猜测、不覆盖。
+- 开始写入前扫描**所有源页**，每页必须有 XPS 打印源；批注、手写和其它页面对象由 OneNote 原生复制一并处理。
+- 已有目标页必须逐页与源页构成“标题 + XPS + 图片内容 + 版面”完全一致的前缀；否则中止，不猜测、不覆盖。
 - 中断后原命令重跑即可从已核验前缀的下一页继续。目标分区开头若只有安全判定出的空白占位页，会先移入回收站。
 - 单页写入或校验失败时，只把**本次新建页**移入 OneNote 回收站并立即停止；不会删除既有已同步页。
 - `SyncHierarchy` 返回和二次复读是桌面 COM 可获得的确认边界；执行期间不要在另一台设备或 OneNote UI 同时编辑/拖动目标页。
+- 原生复制需要前台驱动 OneNote 对话框；运行期间保持 OneNote 解锁且无其它弹窗，不要同时使用键盘鼠标操作 OneNote。
+- 源、目标同名时，会用“目标直属分区名”区分在线本与本地分区组；若仍有多个同名候选则中止，不盲选。
+
+> **旧版栅格页保护**：v1.2 曾通过 XML 重建页面，目标只保留约 144 DPI 的 PNG 预览，丢失 XPS，
+> 放大后会出现锯齿。v1.3 起完全禁用该写入路径；dry-run 若发现这类页会明确报错，绝不会把它当作
+> 可续跑前缀。工具不会自动删除旧页；需要重做时先确认目标，再将旧页移入回收站后运行原生复制。
 
 ### 重打印前清空分区（toc-onenote-clear）
 
@@ -463,7 +470,8 @@ shared=0 的书 sidecar 只有注释行，容易误判为没做过。
 │   ├── onenote/
 │   │   ├── client.py        # OneNote 桌面 COM 薄封装（打印定向/页 XML/显式同步）
 │   │   ├── common.py        # OneNote CLI 共享：默认笔记本/编号解析/排序/范围限定
-│   │   ├── copy.py          # 本地打印页 → OneDrive：过滤 XML、线性同步、哈希校验、续跑
+│   │   ├── copy.py          # 原生整页副本的 XPS/图片只读校验与续跑
+│   │   ├── native_copy.py   # 驱动 OneNote 自身“移动或复制页”，逐页同步并验证
 │   │   ├── printer.py       # 打印后端：SumatraPDF 静默打印到 OneNote 打印机
 │   │   └── fix.py           # 修复「正在清理…」卡死：杀进程+重启+等就绪（不删数据）
 │   └── cli/                 # 薄入口（argparse + 打印），对应各 toc-* 命令

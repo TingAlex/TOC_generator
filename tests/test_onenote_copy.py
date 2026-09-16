@@ -1,105 +1,79 @@
 import base64
 import unittest
-import xml.etree.ElementTree as ET
 
 from tocgen.onenote.client import ONE_NS, Page, Section
 from tocgen.onenote.copy import (
     CopyValidationError,
-    assert_images_equal,
-    copy_printout_page,
-    image_signatures,
-    prepare_printout_page_xml,
+    assert_pages_equal,
+    page_signature,
     verify_resume_prefix,
 )
+from tocgen.onenote.native_copy import copy_native_page
 
 
 def page_xml(page_id: str, title: str = "第一页", data: bytes = b"image-one",
-             *, x: str = "10", y: str = "20", width: str = "300",
-             height: str = "400", extra: str = "") -> str:
+             *, include_xps: bool = True, x: str = "10", y: str = "20",
+             width: str = "300", height: str = "400") -> str:
     encoded = base64.b64encode(data).decode("ascii")
+    xps = """
+  <one:XPSFile xpsFileIndex="0" idDocument="{TEST-DOCUMENT}">
+    <one:CallbackID callbackID="{TEST-CALLBACK}" />
+  </one:XPSFile>""" if include_xps else ""
     return f'''<?xml version="1.0"?>
-<one:Page xmlns:one="{ONE_NS}" ID="{page_id}" objectID="root-object"
- lastModifiedTime="2026-01-01T00:00:00.000Z">
-  <one:PageSettings objectID="settings-object" pageSize="2" />
-  <one:QuickStyleDef index="1" name="PageTitle" fontColor="automatic" />
-  <one:Title><one:OE objectID="title-object" quickStyleIndex="1">
-    <one:T>{title}</one:T>
-  </one:OE></one:Title>
-  <one:XPSFile objectID="local-xps" />
-  <one:CallbackID callbackID="local-callback" />
-  <one:Image objectID="image-object" format="png" isPrintOut="true"
-    xpsFileIndex="0" originalPageNumber="1">
+<one:Page xmlns:one="{ONE_NS}" ID="{page_id}">
+  <one:QuickStyleDef index="1" name="PageTitle" />{xps}
+  <one:PageSettings pageSize="2" />
+  <one:Title><one:OE quickStyleIndex="1"><one:T>{title}</one:T></one:OE></one:Title>
+  <one:Image format="png" isPrintOut="true" xpsFileIndex="0">
     <one:Position x="{x}" y="{y}" />
     <one:Size width="{width}" height="{height}" />
     <one:Data>{encoded}</one:Data>
   </one:Image>
-  {extra}
 </one:Page>'''
 
 
-class PreparePageXmlTests(unittest.TestCase):
-    def test_keeps_self_contained_printout_and_strips_local_references(self):
-        output = prepare_printout_page_xml(page_xml("source"), "destination")
-        root = ET.fromstring(output)
+class PageSignatureTests(unittest.TestCase):
+    def test_native_page_signature_keeps_xps_and_image_identity(self):
+        source = page_signature(page_xml("source"))
+        native_copy = page_signature(page_xml("destination"))
 
-        self.assertEqual(root.get("ID"), "destination")
-        self.assertEqual(
-            [child.tag.rsplit("}", 1)[-1] for child in root],
-            ["PageSettings", "Title", "Image"],
-        )
-        attributes = [name.rsplit("}", 1)[-1]
-                      for node in root.iter() for name in node.attrib]
-        for forbidden in (
-                "objectID", "lastModifiedTime", "quickStyleIndex", "isPrintOut",
-                "xpsFileIndex", "originalPageNumber"):
-            self.assertNotIn(forbidden, attributes)
-        self.assertEqual(image_signatures(output), image_signatures(page_xml("source")))
+        self.assertEqual(source.xps_files, 1)
+        self.assertEqual(source.callbacks, 1)
+        assert_pages_equal(source, native_copy)
 
-    def test_rejects_content_that_would_be_silently_lost(self):
-        extra = '<one:Outline><one:OEChildren /></one:Outline>'
-        with self.assertRaisesRegex(CopyValidationError, "Outline"):
-            prepare_printout_page_xml(page_xml("source", extra=extra), "destination")
+    def test_raster_only_page_is_rejected(self):
+        with self.assertRaisesRegex(CopyValidationError, "固定栅格预览图"):
+            page_signature(page_xml("raster", include_xps=False))
 
-    def test_image_comparison_allows_only_small_float_normalization(self):
-        expected = image_signatures(page_xml("a", x="10.00", width="300.00"))
-        normalized = image_signatures(page_xml("b", x="10.04", width="300.04"))
-        assert_images_equal(expected, normalized)
-
-        changed = image_signatures(page_xml("c", data=b"different"))
+    def test_image_change_is_rejected_even_when_xps_exists(self):
+        source = page_signature(page_xml("source"))
+        changed = page_signature(page_xml("changed", data=b"different"))
         with self.assertRaises(CopyValidationError):
-            assert_images_equal(expected, changed)
+            assert_pages_equal(source, changed)
 
 
 class FakeClient:
-    def __init__(self, *, corrupt_destination: bool = False):
+    def __init__(self):
         self.source_xml = page_xml("source")
-        self.destination_xml = page_xml("destination", title="无标题页", data=b"blank")
-        self.destination_name = "无标题页"
-        self.corrupt_destination = corrupt_destination
+        self.destination_xml: str | None = None
+        self.destination_pages: list[Page] = []
         self.calls: list[tuple] = []
         self.deleted: list[str] = []
 
     def get_page_content(self, page_id, page_info=0):
         self.calls.append(("get", page_id, page_info))
-        return self.source_xml if page_id == "source" else self.destination_xml
-
-    def create_new_page(self, section_id, style=0):
-        self.calls.append(("create", section_id, style))
-        return "destination"
+        if page_id == "source":
+            return self.source_xml
+        if self.destination_xml is None:
+            raise RuntimeError("destination is not ready")
+        return self.destination_xml
 
     def list_section_pages(self, section_id):
         self.calls.append(("list", section_id))
-        return [Page("destination", self.destination_name)]
+        return list(self.destination_pages)
 
-    def update_page_content(self, xml):
-        self.calls.append(("update",))
-        self.destination_xml = xml
-        self.destination_name = "第一页"
-        if self.corrupt_destination:
-            self.destination_xml = self.destination_xml.replace(
-                base64.b64encode(b"image-one").decode("ascii"),
-                base64.b64encode(b"corrupted").decode("ascii"),
-            )
+    def navigate_to(self, page_id):
+        self.calls.append(("navigate", page_id))
 
     def sync_hierarchy(self, object_id):
         self.calls.append(("sync", object_id))
@@ -109,49 +83,58 @@ class FakeClient:
         self.deleted.append(page_id)
 
 
-class LinearCopyTests(unittest.TestCase):
-    def test_copy_syncs_and_verifies_before_returning(self):
+class NativeLinearCopyTests(unittest.TestCase):
+    def test_native_action_is_used_then_xps_is_verified_and_synced(self):
         client = FakeClient()
-        source = Page("source", "第一页")
-        destination = Section("section", "01")
+        action_calls = []
 
-        result = copy_printout_page(
-            client, source, destination, "notebook",
-            sync_settle=0, ready_timeout=0.1,
+        def native_action(notebook, section, title, timeout):
+            action_calls.append((notebook, section, title, timeout))
+            client.destination_xml = page_xml("destination")
+            client.destination_pages = [Page("destination", "第一页")]
+
+        result = copy_native_page(
+            client, Page("source", "第一页"), Section("section", "01"),
+            "notebook-id", "在线笔记本", sync_settle=0, ready_timeout=0.1,
+            copy_action=native_action,
         )
 
         self.assertEqual(result, "destination")
-        syncs = [call for call in client.calls if call[0] == "sync"]
-        self.assertEqual(syncs, [
-            ("sync", "destination"),
-            ("sync", "notebook"),
-            ("sync", "notebook"),
-        ])
+        self.assertEqual(action_calls, [("在线笔记本", "01", "第一页", 0.1)])
+        self.assertIn(("navigate", "source"), client.calls)
+        self.assertEqual(
+            [call for call in client.calls if call[0] == "sync"],
+            [("sync", "destination"),
+             ("sync", "notebook-id"),
+             ("sync", "notebook-id")],
+        )
         self.assertEqual(client.deleted, [])
 
-    def test_failed_verification_recycles_only_new_page(self):
-        client = FakeClient(corrupt_destination=True)
-        with self.assertRaisesRegex(CopyValidationError, "已中止"):
-            copy_printout_page(
+    def test_raster_result_is_recycled(self):
+        client = FakeClient()
+
+        def raster_action(notebook, section, title, timeout):
+            client.destination_xml = page_xml("destination", include_xps=False)
+            client.destination_pages = [Page("destination", "第一页")]
+
+        with self.assertRaisesRegex(CopyValidationError, "原生整页复制"):
+            copy_native_page(
                 client, Page("source", "第一页"), Section("section", "01"),
-                "notebook", sync_settle=0, ready_timeout=0.01,
+                "notebook-id", "在线笔记本", sync_settle=0,
+                ready_timeout=0.01, copy_action=raster_action,
             )
         self.assertEqual(client.deleted, ["destination"])
-        self.assertEqual(client.calls[-1], ("sync", "notebook"))
+        self.assertEqual(client.calls[-1], ("sync", "notebook-id"))
 
-    def test_resume_requires_matching_title_and_image_prefix(self):
+    def test_resume_rejects_legacy_raster_prefix(self):
         client = FakeClient()
-        client.destination_xml = page_xml("destination")
-        client.destination_name = "第一页"
+        client.destination_xml = page_xml("destination", include_xps=False)
+        client.destination_pages = [Page("destination", "第一页")]
         source = Section("source-section", "01", [Page("source", "第一页")])
         destination = Section("destination-section", "01")
-        signatures = {"source": image_signatures(client.source_xml)}
+        signatures = {"source": page_signature(client.source_xml)}
 
-        self.assertEqual(
-            verify_resume_prefix(client, source, destination, signatures), 1)
-
-        client.destination_name = "错位页"
-        with self.assertRaisesRegex(CopyValidationError, "不构成续跑前缀"):
+        with self.assertRaisesRegex(CopyValidationError, "不是完整的 OneNote 原生副本"):
             verify_resume_prefix(client, source, destination, signatures)
 
 

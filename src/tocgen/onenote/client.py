@@ -198,6 +198,10 @@ class OneNoteClient:
         """让 OneNote 同步指定页/笔记本；方法返回后同步调用已完成。"""
         self._app.SyncHierarchy(object_id)
 
+    def navigate_to(self, object_id: str) -> None:
+        """让 OneNote 桌面版导航到指定页；原生整页复制前用于选择源页。"""
+        self._app.NavigateTo(object_id, "")
+
     # ── 打印导入：把打印输出定向到指定分区 ──────────────────────────────
     def set_printout_section(self, section_id: str) -> None:
         """把「print to OneNote 打印机」的打印输出落点设为该分区（之后每次打印新建一页）。

@@ -1,4 +1,4 @@
-"""toc-onenote-copy-online —— Pipeline 5：本地打印页逐页复制到 OneDrive。
+"""toc-onenote-copy-online —— Pipeline 5：OneNote 原生整页复制到 OneDrive。
 
 同名本地/在线笔记本按 path 自动区分。目标使用直属同名分区；源可来自笔记本直属
 分区，也可用 ``--source-section-group`` 指定本地分区组。默认 dry-run 做完整只读预检。
@@ -7,8 +7,8 @@
     toc-onenote-copy-online --source-notebook "书名" --source-section-group "书名" \
         --create-target --write
 
-正式执行时每一页都必须完成“复制 → SyncHierarchy → 稳定等待 → 再同步 → 图片哈希/
-版面/标题复读校验”，成功后才处理下一页。中断后重跑会验证目标是源的完整前缀并续传。
+正式执行时通过 OneNote 自身的“移动或复制页”原生复制整页（不重建 XML），每一页都必须
+保留 XPS 打印源并完成同步、等待和复读校验，成功后才处理下一页。
 """
 
 from __future__ import annotations
@@ -19,14 +19,13 @@ import sys
 from ..onenote.client import PI_ALL, Notebook, OneNoteClient, Page, Section
 from ..onenote.copy import (
     CopyValidationError,
-    ImageSignature,
-    copy_printout_page,
-    image_signatures,
+    PageSignature,
     is_online_path,
-    prepare_printout_page_xml,
+    page_signature,
     verify_resume_prefix,
     wait_section_ready,
 )
+from ..onenote.native_copy import copy_native_page
 
 
 def _pick_unique(notebooks: list[Notebook], name: str, *, online: bool) -> Notebook:
@@ -92,18 +91,16 @@ def _source_sections(client: OneNoteClient, notebook: Notebook,
 
 
 def _scan_sources(client: OneNoteClient, sections: list[Section]) \
-        -> dict[str, tuple[ImageSignature, ...]]:
-    """写入前遍历全部源页，确认每页都能无损克隆；只保留小型摘要。"""
-    signatures: dict[str, tuple[ImageSignature, ...]] = {}
+        -> dict[str, PageSignature]:
+    """写入前遍历全部源页，确认每页都有 XPS 后端；只保留小型摘要。"""
+    signatures: dict[str, PageSignature] = {}
     total = sum(len(section.pages) for section in sections)
     done = 0
     for section in sections:
         for page in section.pages:
             done += 1
             source_xml = client.get_page_content(page.id, PI_ALL)
-            # 先验证可复制对象集合，再用与目标复读相同的规则建立图片摘要。
-            prepare_printout_page_xml(source_xml, "{00000000-0000-0000-0000-000000000000}")
-            signatures[page.id] = image_signatures(source_xml)
+            signatures[page.id] = page_signature(source_xml)
             print(f"  预检源页 {done}/{total}：[{section.name}] {page.name}")
     return signatures
 
@@ -131,8 +128,8 @@ def main() -> None:
                         help="创建在线笔记本时，用它确定 OneDrive 同级父目录（缺省取第一个在线本）")
     parser.add_argument("--sync-settle", type=float, default=8.0,
                         help="每页首次同步后的稳定等待秒数（默认 8）")
-    parser.add_argument("--ready-timeout", type=float, default=30.0,
-                        help="新页可读及复读校验超时秒数（默认 30）")
+    parser.add_argument("--ready-timeout", type=float, default=90.0,
+                        help="原生复制、新页落地及复读校验超时秒数（默认 90）")
     parser.add_argument("--write", action="store_true",
                         help="真正创建/复制（默认 dry-run，只读完整预检）")
     args = parser.parse_args()
@@ -167,7 +164,7 @@ def main() -> None:
         print(f"分区：{', '.join(source_by_name)}")
         print(f"总页数：{sum(len(item.pages) for item in source_sections)}\n")
 
-        print("══ 源页无损复制预检 ══")
+        print("══ 源页 XPS 原生复制预检 ══")
         source_signatures = _scan_sources(client, source_sections)
 
         # 先只读验证所有已存在目标分区；任何冲突都在创建/删除前暴露。
@@ -241,7 +238,7 @@ def main() -> None:
         total_remaining = sum(len(section.pages) - resume.get(name, 0)
                               for name, section in source_by_name.items())
         copied = 0
-        print(f"\n══ 逐页线性复制（待复制 {total_remaining} 页）══")
+        print(f"\n══ OneNote 原生逐页复制（待复制 {total_remaining} 页）══")
         for name, source_section in source_by_name.items():
             destination = target_by_name[name]
             start = resume.get(name, 0)
@@ -249,14 +246,16 @@ def main() -> None:
                     source_section.pages[start:], start=start + 1):
                 print(f"  [{name}] {page_index}/{len(source_section.pages)} "
                       f"{source_page.name} …", flush=True)
-                copy_printout_page(
-                    client, source_page, destination, target_notebook.id,
+                copy_native_page(
+                    client, source_page, destination,
+                    target_notebook.id, target_notebook.name,
                     sync_settle=args.sync_settle,
                     ready_timeout=args.ready_timeout,
-                    expected_signatures=source_signatures[source_page.id],
+                    expected_signature=source_signatures[source_page.id],
                 )
                 copied += 1
-                print(f"    ✓ 已复制、同步并复读校验（本次 {copied}/{total_remaining}）")
+                print(f"    ✓ OneNote 原生整页复制，XPS/图片/同步均已复读校验"
+                      f"（本次 {copied}/{total_remaining}）")
 
         # 最终再查一遍完整页序与图片摘要；不以“命令无异常”代替交付校验。
         client.sync_hierarchy(target_notebook.id)
@@ -268,7 +267,7 @@ def main() -> None:
             if count != len(source_section.pages):
                 raise CopyValidationError(
                     f"分区 {name!r} 最终只有 {count}/{len(source_section.pages)} 页。")
-            print(f"  ✓ [{name}] {count} 页，标题/顺序/图片内容/版面一致")
+            print(f"  ✓ [{name}] {count} 页，标题/顺序/XPS/图片内容/版面一致")
         print(f"\n══ 完成：本次复制 {copied} 页，在线总页数 "
               f"{sum(len(item.pages) for item in source_sections)} ══")
     except CopyValidationError as exc:

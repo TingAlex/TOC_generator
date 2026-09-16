@@ -25,8 +25,8 @@
 │    本地 COM 读分区/页 → 删占位页 · 去重 · 按文件名核对改标题         │
 └───────────────────────────┬──────────────────────────────────┘
 ┌───────────────────────────▼──────────────────────────────────┐
-│  Pipeline 5：本地页逐页复制到 OneDrive（toc-onenote-copy-online） │
-│    复制一页 → 同步/等待/再同步 → 哈希与版面复读通过 → 下一页         │
+│ Pipeline 5：OneNote 原生整页复制到 OneDrive（-copy-online）        │
+│   原生“移动或复制页”保留 XPS → 同步/复读通过 → 下一页               │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -111,8 +111,9 @@ cli/*            ← 薄壳：仅 argparse + 打印，不含业务逻辑
 | `split.py` | `run_split`：按 `toc_parsed.txt` 拆分（用 toc 校验、pdf 切页、registry 取 offset）；`load_boundary_overlap` 读边界重叠 sidecar |
 | `boundary.py` | 拆分边界分析：`compute_boundaries`（找相邻两节的边界）+ 渲染边界页顶部裁剪 + 拼 montage（仅 pymupdf），供 Claude 看图判读 fresh/shared |
 | `onenote/client.py` | OneNote 桌面 COM 薄封装：读层级、建分区组/分区/在线笔记本、创建/读写页 XML、显式同步、改/删页、打印定向与页轮询 |
-| `onenote/common.py` | 四个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
-| `onenote/copy.py` | 本地打印页 → 在线页：安全 XML 重建、图片摘要/版面核验、单页同步屏障、失败回滚与前缀续跑 |
+| `onenote/common.py` | 多个 OneNote CLI 共享：`DEFAULT_NOTEBOOK`、`section_number`、`sorted_pdfs`/`expected_titles`、`resolve_scope`、文件夹助手 |
+| `onenote/copy.py` | 原生整页副本的 XPS/图片只读摘要、内容核验与前缀续跑；不写 Page XML |
+| `onenote/native_copy.py` | COM 定位源页 + UI Automation 驱动 OneNote 自身“移动或复制页”；逐页同步、验证与失败回滚 |
 | `onenote/printer.py` | 打印后端：定位 SumatraPDF + `print_pdf`（静默打印到 OneNote 桌面打印机） |
 | `onenote/fix.py` | 修复 OneNote「正在清理…」卡死：`fix_relaunch`（杀进程+重启+等就绪，**不删任何文件**） |
 | `cli/claude_toc.py` | `toc-claude`：Pipeline 1 的两个纯本地步骤——`render`（渲染目录页）与 `bookmarks`（由 toc_parsed.txt 写书签）；中间看图识别由 Claude 完成 |
@@ -457,40 +458,40 @@ Pipeline 3 打印完成后做收尾。**纯本地离线**：COM 操作本地缓�
 
 ---
 
-## Pipeline 5：本地打印页逐页复制到 OneDrive
+## Pipeline 5：OneNote 原生整页复制到 OneDrive
 
 `toc-onenote-copy-online` 解决“本地笔记本负责稳定接收打印，在线笔记本负责同步归档”之间的搬运。
 源、目标可以同名：`Notebook.path` 非 HTTP(S) 的唯一同名本是源，`path` 为 `https://…` 的唯一同名本
 是目标。源取指定分区组的直属分区（或笔记本根直属分区），目标始终使用在线笔记本根下的同名直属分区。
 
-### 为什么不能原样提交源页 XML
+### 为什么必须调用 OneNote 自身的复制能力
 
-`GetPageContent(pageId, piAll=7, xs2013=2)` 返回的打印页除内嵌 `Image/Data` 外，还包含只在源本地
-笔记本存在的 `XPSFile`、`CallbackID`、`objectID`、`QuickStyleDef` 等引用。把整棵 XML 换一个 Page ID 后提交到另一个
-笔记本，会得到 `0x80042014 (hrObjectDoesNotExist)`。`prepare_printout_page_xml` 因而只重建：
+打印页表面显示的是约 `1191×1684`（约 144 DPI）的 PNG 预览，但源页还包含
+`XPSFile → CallbackID`。正常缩放时，OneNote 先显示预览图，再从 XPS 打印源异步重绘，所以文字会从
+短暂模糊变清晰。若用 `GetPageContent` 读取 XML、再用 `UpdatePageContent` 重建新页，跨笔记本的
+XPS 对象引用会报 `0x80042014 (hrObjectDoesNotExist)`；若为绕过错误而剥离 XPS，目标只剩固定 PNG，
+放大必然出现锯齿。
 
-- `PageSettings`
-- `Title`
-- 全部 `Image`（包含 Base64 `Data`、`Position`、`Size` 和格式）
-
-并递归移除 `objectID`、创建/修改者与时间、`xpsFileIndex`、`originalPageNumber`、`isPrintOut`，以及
-OE 的 `quickStyleIndex`。若源页根下出现 Outline、手写或其它未支持对象，预检直接中止；不能以“复制成功”
-为理由静默丢内容。本能力的明确输入域是 Pipeline 3 生成的 **PDF 打印输出页**。
+因此 v1.3 的硬规则是：**正文 XML 只读，不再用于跨笔记本造页**。桌面 COM 类型库没有 `CopyPage`，
+所以 `native_copy.py` 采用微软公开的[桌面快捷键 `Ctrl+Alt+M`](https://support.microsoft.com/en-us/accessibility/onenote/keyboard-shortcuts-in-onenote)，驱动 OneNote 自身的“移动或复制页”
+对话框选择目标分区并点击“复制”。XPS、打印图片、批注和其它页面对象都由 OneNote 自己搬运。
 
 ### 单页同步屏障
 
 ```
 for 目标分区（按源层级顺序）:
-    验证目标已有页 == 源页的内容前缀
+    验证目标已有页 == 源页的原生副本前缀（必须有 XPS）
     for 源页 in 尚未复制的后缀:
-        destination = CreateNewPage(target_section)
-        等 destination 在 GetHierarchy 中可见且 GetPageContent 可读
-        UpdatePageContent(过滤后的自包含 XML)
+        NavigateTo(source_page)                         # COM 精确选源页
+        Ctrl+Alt+M                                      # OneNote 原生对话框
+        选中 target_notebook / target_section → “复制”
+        等 OneNote 生成唯一新页
+        复读 destination：标题 + XPS/CallbackID + 图片摘要/版面
         SyncHierarchy(destination)
         SyncHierarchy(target_notebook)
         wait(sync_settle=8s)
         SyncHierarchy(target_notebook)
-        复读 destination，验证标题 + 每张图片摘要/版面
+        再次复读 XPS 与图片摘要
         # 只有验证通过才进入下一页
 ```
 
@@ -500,9 +501,10 @@ for 目标分区（按源层级顺序）:
 
 ### 预检、续跑与失败边界
 
-- 默认 dry-run，但不是只列名称：它用 `piAll` 扫描全部源页并建立小型图片摘要，确保整批可无损复制。
-- 目标已有页数不得超过源；每一页的标题、图片数量/顺序、二进制和版面都必须等于源的同位置页。
+- 默认 dry-run，但不是只列名称：它用 `piAll` 扫描全部源页，确认每页都有 XPS，并建立小型图片摘要。
+- 目标已有页数不得超过源；每一页的标题、XPS/CallbackID、图片数量/顺序、二进制和版面都必须等于源。
   满足时它是可续跑前缀，从下一页继续；任一不符都在写入前中止。
+- v1.2 产生的旧栅格页缺少 XPS，v1.3 会明确拒绝把它当作续跑前缀；不会自动删除或覆盖旧页。
 - 新建分区的安全空白占位页可移入回收站；不会清空或覆盖其它目标页。
 - 单页失败时仅 `DeleteHierarchy(本次新页, 0.0, False)`，同步这一删除并中止。此前通过校验的页保留，
   下次运行从已验证前缀续跑。
@@ -545,7 +547,8 @@ for 目标分区（按源层级顺序）:
 |----|------|
 | `pymupdf` | PDF 渲染、书签写入、页面提取与切片 |
 | `openpyxl` | 读写 Excel 配置 |
-| `comtypes` | Pipeline 2.5 / 3 / 4 / 5：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）。纯 Python、免编译，故选它而非 pywin32；调用须早绑定 |
+| `comtypes` | Pipeline 2.5 / 3 / 4 / 5：OneNote 本地 COM 自动化（仅 Windows + OneNote 桌面版）；调用须早绑定 |
+| `pywinauto` | Pipeline 5：UI Automation 驱动 OneNote 自身的“移动或复制页”原生对话框；Windows-only |
 | **SumatraPDF**（外部 exe，非 Python 包） | Pipeline 3 打印后端：`-print-to "OneNote (Desktop)" -silent` 静默打印。经 `subprocess` 调用，不入 `dependencies` |
 
 构建：`hatchling`（`[build-system]`），打包 `src/tocgen`，console_scripts 见 `pyproject.toml [project.scripts]`。
