@@ -156,6 +156,48 @@ class OneNoteBatchTests(unittest.TestCase):
                     child_runner=success,
                 )
 
+    def test_orphan_running_state_is_recovered_on_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = load_plan(self.write_plan(root, [{
+                "source_notebook": "可续跑书",
+            }]))
+            state_path, log_path, lock_path = self.paths(root)
+
+            def crash(command, *, cwd, log, on_line):
+                raise KeyboardInterrupt("模拟调度进程被关闭")
+
+            with self.assertRaises(KeyboardInterrupt):
+                run_plan(
+                    plan,
+                    state_path=state_path,
+                    log_path=log_path,
+                    lock_path=lock_path,
+                    cwd=root,
+                    write=True,
+                    max_attempts=1,
+                    retry_delay=0,
+                    child_runner=crash,
+                )
+
+            def success(command, *, cwd, log, on_line):
+                return 0
+
+            self.assertEqual(run_plan(
+                plan,
+                state_path=state_path,
+                log_path=log_path,
+                lock_path=lock_path,
+                cwd=root,
+                write=True,
+                max_attempts=1,
+                retry_delay=0,
+                child_runner=success,
+            ), 0)
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            self.assertEqual(state["recoveries"], 1)
+            self.assertEqual(state["status"], "complete")
+
 
 if __name__ == "__main__":
     unittest.main()

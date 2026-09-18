@@ -164,8 +164,11 @@ def copy_native_page(
         copy_action: Callable[[str, str, str, float], None] =
         copy_current_page_with_onenote) -> str:
     """用 OneNote 原生 UI 复制一页，完成同步与 XPS/图片复读后返回新页 ID。"""
-    source_xml = client.get_page_content(source_page.id, PI_ALL)
-    expected = expected_signature or page_signature(source_xml)
+    # 调用方已在同一事务里读取并校验过源页时，不要再次向 OneNote 请求整页
+    # PI_ALL。打印页 XML 含多张 Base64 图片，重复读取会显著拖慢并卡住 UI。
+    expected = expected_signature
+    if expected is None:
+        expected = page_signature(client.get_page_content(source_page.id, PI_ALL))
     before = {page.id for page in client.list_section_pages(destination_section.id)}
     new_page: Page | None = None
     try:

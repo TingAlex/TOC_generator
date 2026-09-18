@@ -126,6 +126,22 @@ class NativeLinearCopyTests(unittest.TestCase):
         self.assertEqual(client.deleted, ["destination"])
         self.assertEqual(client.calls[-1], ("sync", "notebook-id"))
 
+    def test_precomputed_source_signature_avoids_second_large_source_read(self):
+        client = FakeClient()
+        expected = page_signature(client.source_xml)
+
+        def native_action(notebook, section, title, timeout):
+            client.destination_xml = page_xml("destination")
+            client.destination_pages = [Page("destination", "第一页")]
+
+        copy_native_page(
+            client, Page("source", "第一页"), Section("section", "01"),
+            "notebook-id", "在线笔记本", sync_settle=0, ready_timeout=0.1,
+            expected_signature=expected, copy_action=native_action,
+        )
+
+        self.assertNotIn(("get", "source", 7), client.calls)
+
     def test_resume_rejects_legacy_raster_prefix(self):
         client = FakeClient()
         client.destination_xml = page_xml("destination", include_xps=False)

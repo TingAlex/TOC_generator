@@ -20,6 +20,7 @@ from ..onenote.client import PI_ALL, Notebook, OneNoteClient, Page, Section
 from ..onenote.copy import (
     CopyValidationError,
     PageSignature,
+    assert_pages_equal,
     is_online_path,
     page_signature,
     verify_resume_prefix,
@@ -112,6 +113,32 @@ def _without_placeholder(client: OneNoteClient, pages: list[Page]) \
     return pages, None
 
 
+def _verify_resume_streaming(client: OneNoteClient, source: Section,
+                             destination: Section,
+                             current_pages: list[Page]) -> int:
+    """逐页读取源/目标并立即丢弃大 XML，避免整本书 PI_ALL 堆积和长时间无进度。"""
+    if len(current_pages) > len(source.pages):
+        raise CopyValidationError(
+            f"分区 {destination.name!r} 目标页数 {len(current_pages)} "
+            f"超过源页数 {len(source.pages)}。")
+    for index, (left, right) in enumerate(
+            zip(source.pages, current_pages), 1):
+        if left.name != right.name:
+            raise CopyValidationError(
+                f"分区 {source.name!r} 第 {index} 页标题不构成续跑前缀："
+                f"{left.name!r} != {right.name!r}。")
+        try:
+            expected = page_signature(client.get_page_content(left.id, PI_ALL))
+            actual = page_signature(client.get_page_content(right.id, PI_ALL))
+            assert_pages_equal(expected, actual)
+        except CopyValidationError as exc:
+            raise CopyValidationError(
+                f"分区 {source.name!r} 第 {index} 页不是完整的 OneNote 原生副本："
+                f"{exc}") from exc
+        print(f"  [{source.name}] 续跑复核 {index}/{len(current_pages)}：{left.name}")
+    return len(current_pages)
+
+
 def main() -> None:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
@@ -164,42 +191,45 @@ def main() -> None:
         print(f"分区：{', '.join(source_by_name)}")
         print(f"总页数：{sum(len(item.pages) for item in source_sections)}\n")
 
-        print("══ 源页 XPS 原生复制预检 ══")
-        source_signatures = _scan_sources(client, source_sections)
-
-        # 先只读验证所有已存在目标分区；任何冲突都在创建/删除前暴露。
+        # 先只读取得目标结构。写入模式不再对整本书做 PI_ALL 双份预扫；
+        # 新目标会立刻创建，随后按分区流式“续跑复核 → 复制 → 轻量收尾”。
         target_by_name: dict[str, Section] = {}
-        resume: dict[str, int] = {}
-        placeholders: dict[str, Page] = {}
         missing: list[str] = []
         if target_notebook is not None:
             target_by_name = _unique_sections(
                 target_notebook.direct_sections, "目标笔记本根")
-            print("\n══ 目标续跑预检 ══")
             for name, source_section in source_by_name.items():
-                destination = target_by_name.get(name)
-                if destination is None:
+                if target_by_name.get(name) is None:
                     missing.append(name)
-                    print(f"  [{name}] 缺失，将新建")
-                    continue
-                pages, placeholder = _without_placeholder(
-                    client, client.list_section_pages(destination.id))
-                if placeholder is not None:
-                    placeholders[name] = placeholder
-                resume[name] = verify_resume_prefix(
-                    client, source_section, destination, source_signatures,
-                    current_pages=pages)
-                note = "；将移除开头空白占位页" if placeholder else ""
-                print(f"  [{name}] 已有有效页 {resume[name]}/{len(source_section.pages)}{note}")
         else:
             missing = list(source_by_name)
-            print(f"\n在线笔记本不存在，将新建并创建 {len(missing)} 个直属分区。")
 
         if missing and target_notebook is not None and not args.create_target:
             raise CopyValidationError(
                 "目标缺少分区且未启用 --create-target：" + ", ".join(missing))
 
         if not args.write:
+            print("══ 源页 XPS 原生复制预检 ══")
+            source_signatures = _scan_sources(client, source_sections)
+            resume: dict[str, int] = {}
+            if target_notebook is not None:
+                print("\n══ 目标续跑预检 ══")
+                for name, source_section in source_by_name.items():
+                    destination = target_by_name.get(name)
+                    if destination is None:
+                        print(f"  [{name}] 缺失，将新建")
+                        continue
+                    pages, placeholder = _without_placeholder(
+                        client, client.list_section_pages(destination.id))
+                    resume[name] = verify_resume_prefix(
+                        client, source_section, destination, source_signatures,
+                        current_pages=pages)
+                    note = "；将移除开头空白占位页" if placeholder else ""
+                    print(f"  [{name}] 已有有效页 {resume[name]}/"
+                          f"{len(source_section.pages)}{note}")
+            else:
+                print(f"\n在线笔记本不存在，将新建并创建 "
+                      f"{len(missing)} 个直属分区。")
             remaining = sum(len(section.pages) - resume.get(name, 0)
                             for name, section in source_by_name.items())
             print(f"\n[dry-run] 预检通过；待线性复制 {remaining} 页，未改动 OneNote。")
@@ -213,30 +243,29 @@ def main() -> None:
             target_notebook = Notebook(id=target_id, name=target_name)
             print(f"\n✓ 已创建在线笔记本「{target_name}」（同级于「{reference.name}」）")
 
-        # 所有既有内容均已验证，才执行增量结构变更。
         for name in missing:
             section_id = client.create_section(target_notebook.id, name)
             target_by_name[name] = Section(section_id, name)
-            resume[name] = 0
             print(f"✓ 已创建目标直属分区「{name}」")
-            initial_pages = wait_section_ready(
-                client, section_id, timeout=args.ready_timeout)
-            effective_pages, placeholder = _without_placeholder(client, initial_pages)
-            if effective_pages:
-                raise CopyValidationError(
-                    f"刚创建的分区「{name}」意外已有非空页面，已中止且未删除该分区。")
+            wait_section_ready(client, section_id, timeout=args.ready_timeout)
+
+        # 各分区流式处理。源页 PI_ALL 只读一次；复制后的目标页在单页事务内
+        # 校验两次。已存在前缀只在所属分区开始时逐页复核，不再整本双扫。
+        resume: dict[str, int] = {}
+        for name, source_section in source_by_name.items():
+            destination = target_by_name[name]
+            pages, placeholder = _without_placeholder(
+                client, client.list_section_pages(destination.id))
+            resume[name] = _verify_resume_streaming(
+                client, source_section, destination, pages)
             if placeholder is not None:
                 client.delete_page(placeholder.id)
                 client.sync_hierarchy(target_notebook.id)
-                print(f"  ✓ 新分区空白占位页已移入回收站")
+                print(f"  ✓ [{name}] 空白占位页已移入回收站")
 
-        for name, placeholder in placeholders.items():
-            client.delete_page(placeholder.id)
-            client.sync_hierarchy(target_notebook.id)
-            print(f"✓ [{name}] 开头空白占位页已移入回收站")
-
-        total_remaining = sum(len(section.pages) - resume.get(name, 0)
-                              for name, section in source_by_name.items())
+        total_remaining = sum(
+            len(section.pages) - resume.get(name, 0)
+            for name, section in source_by_name.items())
         copied = 0
         print(f"\n══ OneNote 原生逐页复制（待复制 {total_remaining} 页）══")
         for name, source_section in source_by_name.items():
@@ -246,28 +275,34 @@ def main() -> None:
                     source_section.pages[start:], start=start + 1):
                 print(f"  [{name}] {page_index}/{len(source_section.pages)} "
                       f"{source_page.name} …", flush=True)
+                expected = page_signature(
+                    client.get_page_content(source_page.id, PI_ALL))
                 copy_native_page(
                     client, source_page, destination,
                     target_notebook.id, target_notebook.name,
                     sync_settle=args.sync_settle,
                     ready_timeout=args.ready_timeout,
-                    expected_signature=source_signatures[source_page.id],
+                    expected_signature=expected,
                 )
                 copied += 1
                 print(f"    ✓ OneNote 原生整页复制，XPS/图片/同步均已复读校验"
                       f"（本次 {copied}/{total_remaining}）")
 
-        # 最终再查一遍完整页序与图片摘要；不以“命令无异常”代替交付校验。
+        # 每页已在单页事务中做过两次 PI_ALL 校验；收尾只复查层级中的
+        # 数量/标题/顺序，避免第三次读取整本大图片再次拖垮 OneNote。
         client.sync_hierarchy(target_notebook.id)
-        print("\n══ 最终完整校验 ══")
+        print("\n══ 最终层级校验 ══")
         for name, source_section in source_by_name.items():
             destination = target_by_name[name]
-            count = verify_resume_prefix(
-                client, source_section, destination, source_signatures)
-            if count != len(source_section.pages):
+            final_pages = client.list_section_pages(destination.id)
+            expected_titles = [page.name for page in source_section.pages]
+            actual_titles = [page.name for page in final_pages]
+            if actual_titles != expected_titles:
                 raise CopyValidationError(
-                    f"分区 {name!r} 最终只有 {count}/{len(source_section.pages)} 页。")
-            print(f"  ✓ [{name}] {count} 页，标题/顺序/XPS/图片内容/版面一致")
+                    f"分区 {name!r} 最终页数或标题顺序不一致："
+                    f"{len(final_pages)}/{len(source_section.pages)}。")
+            print(f"  ✓ [{name}] {len(final_pages)} 页；标题与顺序一致，"
+                  "每页 XPS/图片已在复制事务中复读")
         print(f"\n══ 完成：本次复制 {copied} 页，在线总页数 "
               f"{sum(len(item.pages) for item in source_sections)} ══")
     except CopyValidationError as exc:

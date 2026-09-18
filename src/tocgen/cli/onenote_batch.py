@@ -171,6 +171,27 @@ def _load_or_create_state(path: Path, plan: BatchPlan, *, mode: str) -> dict:
     return state
 
 
+def lock_is_held(path: Path) -> bool:
+    """探测调度锁；状态写着 running 但锁未持有即为孤儿状态。"""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    stream = path.open("a+b")
+    try:
+        stream.seek(0, os.SEEK_END)
+        if stream.tell() == 0:
+            stream.write(b"0")
+            stream.flush()
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return True
+        stream.seek(0)
+        msvcrt.locking(stream.fileno(), msvcrt.LK_UNLCK, 1)
+        return False
+    finally:
+        stream.close()
+
+
 @contextmanager
 def single_instance_lock(path: Path) -> Iterator[None]:
     """Windows 文件区间锁；进程退出后由系统自动释放。"""
@@ -249,7 +270,14 @@ def run_plan(plan: BatchPlan, *, state_path: Path, log_path: Path,
         if state.get("status") == "complete":
             print("任务已完成；无需重复执行。")
             return 0
+        if state.get("status") in {"running", "retrying"}:
+            state["recoveries"] = int(state.get("recoveries", 0)) + 1
+            state["recovered_at"] = _utc_now()
+            for item in state.get("jobs", []):
+                if item.get("status") in {"running", "retrying"}:
+                    item["status"] = "pending"
         state["status"] = "running"
+        state["runner_pid"] = os.getpid()
         state["updated_at"] = _utc_now()
         _atomic_json(state_path, state)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -385,7 +413,16 @@ def main() -> None:
     if args.status:
         if not args.state.exists():
             sys.exit(f"状态文件尚未生成：{args.state}")
-        print(args.state.read_text(encoding="utf-8"), end="")
+        state = json.loads(args.state.read_text(encoding="utf-8"))
+        active = lock_is_held(args.lock)
+        state["process_active"] = active
+        if state.get("status") in {"running", "retrying"} and not active:
+            state["effective_status"] = "interrupted"
+            state["diagnostic"] = (
+                "状态为运行中，但单实例锁未被进程持有；可安全重启续跑。")
+        else:
+            state["effective_status"] = state.get("status")
+        print(json.dumps(state, ensure_ascii=False, indent=2))
         return
     try:
         plan = load_plan(args.plan)
