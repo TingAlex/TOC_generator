@@ -433,6 +433,9 @@ uv run toc-onenote-batch --plan .runtime\math-onenote.json --write --detach
 # 随时只读查看机器状态，不接管复制过程
 uv run toc-onenote-batch --plan .runtime\math-onenote.json --status
 Get-Content -Encoding UTF8 .runtime\math-onenote.log -Tail 30
+
+# 长任务推荐交给 Windows 任务计划程序；异常退出由系统重启，不依赖终端或 AI 会话
+.\scripts\start_onenote_batch_task.ps1 -Plan .runtime\math-onenote.json
 ```
 
 默认每本最多尝试 3 次、失败后等 30 秒；可用 `--max-attempts` 和 `--retry-delay` 调整。状态 JSON 每收到
@@ -441,6 +444,8 @@ Get-Content -Encoding UTF8 .runtime\math-onenote.log -Tail 30
 旧进度误套到新任务。运行期间仍需保持 Windows 会话解锁、OneNote 无弹窗，并且不要手工操作 OneNote。
 `--status` 会同时探测单实例锁：若 JSON 仍写着 `running` 但进程锁已经释放，会显示
 `effective_status: interrupted`，明确提示可安全重启，不再把陈旧状态伪装成正在运行。
+任务计划程序入口使用当前登录用户的交互会话（OneNote 原生对话框必须在该会话里运行），设置 3 次一分钟
+间隔的进程级重启和 12 小时执行上限；同名任务再次启动会更新定义但不会并行执行。
 
 源本和在线本同名且都使用直属同名分区时，请先让源本的 OneNote **显示昵称**与在线本不同（例如追加
 `_本地`；磁盘目录及层级 `name` 不必改变）。这是原生“移动或复制页”对话框消除同名歧义所必需；若

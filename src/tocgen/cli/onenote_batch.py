@@ -78,6 +78,13 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _console_write(value: str) -> None:
+    """任务计划程序没有控制台时安静跳过；完整输出仍写入批处理日志。"""
+    if sys.stdout is not None:
+        sys.stdout.write(value)
+        sys.stdout.flush()
+
+
 def load_plan(path: Path) -> BatchPlan:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -250,8 +257,7 @@ def run_child(command: list[str], *, cwd: Path, log: TextIO,
     )
     assert process.stdout is not None
     for line in process.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
+        _console_write(line)
         log.write(line)
         log.flush()
         on_line(line)
@@ -268,7 +274,7 @@ def run_plan(plan: BatchPlan, *, state_path: Path, log_path: Path,
     with single_instance_lock(lock_path):
         state = _load_or_create_state(state_path, plan, mode=mode)
         if state.get("status") == "complete":
-            print("任务已完成；无需重复执行。")
+            _console_write("任务已完成；无需重复执行。\n")
             return 0
         if state.get("status") in {"running", "retrying"}:
             state["recoveries"] = int(state.get("recoveries", 0)) + 1
@@ -300,7 +306,7 @@ def run_plan(plan: BatchPlan, *, state_path: Path, log_path: Path,
                     header = (f"\n=== job {index + 1}/{len(plan.jobs)} "
                               f"attempt {attempt}/{max_attempts}: "
                               f"{job.source_notebook} -> {job.target_name} ===\n")
-                    print(header, end="")
+                    _console_write(header)
                     log.write(header)
 
                     def on_line(line: str) -> None:
@@ -320,7 +326,7 @@ def run_plan(plan: BatchPlan, *, state_path: Path, log_path: Path,
                     _atomic_json(state_path, state)
                     if attempt < max_attempts:
                         message = f"任务失败，{retry_delay:g} 秒后从已验证前缀重试。\n"
-                        print(message, end="")
+                        _console_write(message)
                         log.write(message)
                         log.flush()
                         time.sleep(retry_delay)
@@ -337,7 +343,7 @@ def run_plan(plan: BatchPlan, *, state_path: Path, log_path: Path,
             state["updated_at"] = _utc_now()
             _atomic_json(state_path, state)
             log.write(f"=== batch complete {_utc_now()} ===\n")
-            print("全部 OneNote 批处理任务已完成。")
+            _console_write("全部 OneNote 批处理任务已完成。\n")
             return 0
 
 
@@ -382,7 +388,7 @@ def _detach(args: argparse.Namespace) -> int:
 
 
 def main() -> None:
-    if hasattr(sys.stdout, "reconfigure"):
+    if sys.stdout is not None and hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(line_buffering=True)
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", type=Path, required=True,
