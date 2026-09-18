@@ -122,6 +122,7 @@ uv sync
 | `toc-onenote-titles` | Pipeline 4 核对标题 + 删占位页 + 去重 |
 | `toc-onenote-strip` | 遗留工具：删除误插入的 PDF 附件（当前打印流程不产生此问题） |
 | `toc-onenote-copy-online` | Pipeline 5 调用 OneNote 原生“移动或复制页”，把本地打印页完整复制到 OneDrive，保留 XPS 缩放重绘能力 |
+| `toc-onenote-batch` | Pipeline 5 无人值守执行器：多本串行、断点续跑、有限重试、状态与日志落盘 |
 
 每个命令都支持 `--help`。
 
@@ -395,6 +396,51 @@ uv run toc-onenote-copy-online `
 > **旧版栅格页保护**：v1.2 曾通过 XML 重建页面，目标只保留约 144 DPI 的 PNG 预览，丢失 XPS，
 > 放大后会出现锯齿。v1.3 起完全禁用该写入路径；dry-run 若发现这类页会明确报错，绝不会把它当作
 > 可续跑前缀。工具不会自动删除旧页；需要重做时先确认目标，再将旧页移入回收站后运行原生复制。
+
+#### 无人值守批处理（推荐）
+
+多本书不需要 AI 逐页盯守。把任务写入 `version=1` 的 JSON 清单，执行器会逐本调用上面的原生复制命令；
+每本内部仍然严格逐页同步和复读，失败后从目标中已验证的原生副本前缀继续，而不是重复复制。
+
+```json
+{
+  "version": 1,
+  "jobs": [
+    {
+      "source_notebook": "2027数学真题分类全刷2000",
+      "target_notebook": "2027数学真题分类全刷2000",
+      "create_target": true,
+      "sync_settle": 8,
+      "ready_timeout": 120
+    },
+    {
+      "source_notebook": "名师大招册",
+      "target_notebook": "名师大招册",
+      "create_target": true,
+      "sync_settle": 8,
+      "ready_timeout": 120
+    }
+  ]
+}
+```
+
+```powershell
+# 隐藏后台运行；命令立即返回，复制无需保持 AI 会话
+uv run toc-onenote-batch --plan .runtime\math-onenote.json --write --detach
+
+# 随时只读查看机器状态，不接管复制过程
+uv run toc-onenote-batch --plan .runtime\math-onenote.json --status
+Get-Content -Encoding UTF8 .runtime\math-onenote.log -Tail 30
+```
+
+默认每本最多尝试 3 次、失败后等 30 秒；可用 `--max-attempts` 和 `--retry-delay` 调整。状态 JSON 每收到
+一行进度就原子替换，日志只追加，锁文件阻止同一批任务被重复启动。任务中途退出后，原命令再次运行即可；
+完成的书会跳过，未完成的书由底层页前缀校验决定续跑位置。清单内容改变时必须使用新的状态文件，避免把
+旧进度误套到新任务。运行期间仍需保持 Windows 会话解锁、OneNote 无弹窗，并且不要手工操作 OneNote。
+
+源本和在线本同名且都使用直属同名分区时，请先让源本的 OneNote **显示昵称**与在线本不同（例如追加
+`_本地`；磁盘目录及层级 `name` 不必改变）。这是原生“移动或复制页”对话框消除同名歧义所必需；若
+仍出现多个候选，代码会停止，不会猜选。
 
 ### 重打印前清空分区（toc-onenote-clear）
 

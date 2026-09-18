@@ -1,6 +1,6 @@
 [project]
 name = "pdf-toc"
-version = "1.3.0"
+version = "1.4.0"
 description = "PDF 目录识别 + 书签 + 按章节拆分 + OneNote 打印导入、整理与线性同步"
 readme = "README.md"
 requires-python = ">=3.14"
@@ -28,6 +28,7 @@ toc-onenote-fix       = "tocgen.cli.onenote_fix:main"      # 修复 OneNote「�
 toc-onenote-titles    = "tocgen.cli.onenote_titles:main"  # Pipeline 4 核对标题/删占位/去重
 toc-onenote-strip     = "tocgen.cli.onenote_strip:main"   # Pipeline 4 删误插入附件
 toc-onenote-copy-online = "tocgen.cli.onenote_copy_online:main" # Pipeline 5 OneNote 原生整页复制到 OneDrive
+toc-onenote-batch       = "tocgen.cli.onenote_batch:main"       # Pipeline 5 无人值守批处理/断点续跑/状态日志
 
 [build-system]
 requires = ["hatchling"]
